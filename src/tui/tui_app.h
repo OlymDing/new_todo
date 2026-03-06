@@ -5,10 +5,11 @@
 #include "todo.h"
 #include <string>
 #include <vector>
+#include <ctime>
 
 namespace tui {
 
-enum class Modal { None, AddTodo, ConfirmDelete };
+enum class Modal { None, AddTodo, ConfirmDelete, EditDetail };
 
 struct FlatItem {
     Todo  todo;
@@ -33,8 +34,22 @@ private:
     int64_t               delete_id_      = 0;
     int64_t               add_parent_id_  = 0;
 
+    // edit buffers
+    std::string  edit_title_;
+    std::string  edit_ext_info_;
+    int          edit_status_idx_ = 0;
+
+    // panel/tab focus
+    int          focus_panel_ = 0;
+    int          tab_focus_   = 0;
+
     std::string next_status(const std::string& current) const;
     void        refresh_todos();
+
+    void        begin_edit();
+    void        commit_edit();
+    void        cancel_edit();
+    std::string format_timestamp(int64_t ts) const;
 };
 
 } // namespace tui

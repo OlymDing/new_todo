@@ -36,6 +36,51 @@ std::string TuiApp::next_status(const std::string& current) const {
     return *std::next(it);
 }
 
+void TuiApp::begin_edit() {
+    if (items_.empty()) return;
+    const auto& t  = items_[selected_].todo;
+    edit_title_    = t.title;
+    edit_ext_info_ = t.ext_info;
+    const auto& sv = cfg_.statuses;
+    auto it = std::find(sv.begin(), sv.end(), t.status);
+    edit_status_idx_ = (it != sv.end()) ? (int)(it - sv.begin()) : 0;
+    modal_       = Modal::EditDetail;
+    tab_focus_   = 3;
+    focus_panel_ = 1;
+}
+
+void TuiApp::commit_edit() {
+    if (!items_.empty()) {
+        const auto& t = items_[selected_].todo;
+        std::string new_status = cfg_.statuses.empty()
+            ? t.status : cfg_.statuses[edit_status_idx_];
+        svc_.updateTodo(t.id,
+            edit_title_.empty() ? std::nullopt
+                                : std::optional<std::string>(edit_title_),
+            new_status,
+            edit_ext_info_);
+        refresh_todos();
+    }
+    cancel_edit();
+}
+
+void TuiApp::cancel_edit() {
+    edit_title_.clear();
+    edit_ext_info_.clear();
+    edit_status_idx_ = 0;
+    modal_       = Modal::None;
+    tab_focus_   = 0;
+    focus_panel_ = 0;
+}
+
+std::string TuiApp::format_timestamp(int64_t ts) const {
+    if (ts == 0) return "(none)";
+    std::time_t t = (std::time_t)ts;
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", std::localtime(&t));
+    return buf;
+}
+
 int TuiApp::run() {
     refresh_todos();
 
@@ -54,10 +99,12 @@ int TuiApp::run() {
             refresh_todos();
         }
         modal_ = Modal::None;
+        tab_focus_ = 0;
     });
     auto add_cancel = Button("Cancel", [&] {
         add_input_.clear();
         modal_ = Modal::None;
+        tab_focus_ = 0;
     });
     auto add_buttons = Container::Horizontal({ add_ok, add_cancel });
     auto add_comp = Container::Vertical({ add_input, add_buttons });
@@ -70,33 +117,62 @@ int TuiApp::run() {
             refresh_todos();
         }
         modal_ = Modal::None;
+        tab_focus_ = 0;
     });
     auto del_no = Button("  No   ", [&] {
         delete_id_ = 0;
         modal_ = Modal::None;
+        tab_focus_ = 0;
     });
     auto del_comp = Container::Horizontal({ del_yes, del_no });
 
-    // ---- Tab container (0=main, 1=add, 2=delete) ----
-    int tab_focus = 0;
+    // ---- Edit detail components ----
+    InputOption title_opt;
+    title_opt.multiline = false;
+    title_opt.on_enter  = [&] { commit_edit(); };
+    auto edit_title_input = Input(&edit_title_, title_opt);
+
+    InputOption note_opt;
+    note_opt.multiline = true;
+    auto edit_note_input = Input(&edit_ext_info_, note_opt);
+
+    auto edit_save_btn   = Button("  Save  ", [&] { commit_edit(); });
+    auto edit_cancel_btn = Button(" Cancel ", [&] { cancel_edit(); });
+    auto edit_btns       = Container::Horizontal({ edit_save_btn, edit_cancel_btn });
+    auto edit_inputs_comp = Container::Vertical({
+        edit_title_input, edit_note_input, edit_btns
+    });
+
+    // ---- Tab container (0=main, 1=add, 2=delete, 3=edit) ----
     auto dummy = Renderer([] { return text(""); });
-    auto tab_container = Container::Tab({ dummy, add_comp, del_comp }, &tab_focus);
+    auto tab_container = Container::Tab(
+        { dummy, add_comp, del_comp, edit_inputs_comp },
+        &tab_focus_
+    );
 
     // ---- Global event handler ----
     auto main_comp = CatchEvent(tab_container, [&](Event ev) -> bool {
-        // Modal-specific events
-        if (modal_ != Modal::None) {
-            if (ev == Event::Escape) {
-                add_input_.clear();
-                delete_id_ = 0;
-                modal_ = Modal::None;
-                tab_focus = 0;
+        // Escape: close all modals
+        if (ev == Event::Escape) {
+            if (modal_ == Modal::AddTodo || modal_ == Modal::ConfirmDelete) {
+                add_input_.clear(); delete_id_ = 0;
+                modal_ = Modal::None; tab_focus_ = 0;
                 return true;
             }
-            return false;  // let modal component handle it
+            if (modal_ == Modal::EditDetail) { cancel_edit(); return true; }
+            return false;
         }
 
-        // Main list navigation
+        // AddTodo / ConfirmDelete: pass through to modal component
+        if (modal_ == Modal::AddTodo || modal_ == Modal::ConfirmDelete)
+            return false;
+
+        // EditDetail mode: only Escape is handled above; all other keys pass through
+        // to edit_inputs_comp so that characters (including 's') type into the fields.
+        if (modal_ == Modal::EditDetail)
+            return false;
+
+        // Normal mode (left panel)
         if (ev == Event::ArrowUp || ev == Event::Character('k')) {
             if (!items_.empty() && selected_ > 0) --selected_;
             return true;
@@ -109,7 +185,7 @@ int TuiApp::run() {
             add_parent_id_ = 0;
             add_input_.clear();
             modal_ = Modal::AddTodo;
-            tab_focus = 1;
+            tab_focus_ = 1;
             return true;
         }
         if (ev == Event::Character('c')) {
@@ -117,7 +193,7 @@ int TuiApp::run() {
                 add_parent_id_ = items_[selected_].todo.id;
                 add_input_.clear();
                 modal_ = Modal::AddTodo;
-                tab_focus = 1;
+                tab_focus_ = 1;
             }
             return true;
         }
@@ -125,7 +201,7 @@ int TuiApp::run() {
             if (!items_.empty()) {
                 delete_id_ = items_[selected_].todo.id;
                 modal_ = Modal::ConfirmDelete;
-                tab_focus = 2;
+                tab_focus_ = 2;
             }
             return true;
         }
@@ -137,6 +213,7 @@ int TuiApp::run() {
             }
             return true;
         }
+        if (ev == Event::Character('u')) { begin_edit(); return true; }
         if (ev == Event::Character('q')) {
             screen.ExitLoopClosure()();
             return true;
@@ -151,11 +228,11 @@ int TuiApp::run() {
         // Header
         rows.push_back(
             hbox({
-                text("  ID  ") | bold,
-                text(" "),
-                text("Title                              ") | bold,
-                text(" "),
-                text("Status      ") | bold,
+                text("  ID") | bold,
+                text("  "),
+                text("Title                    ") | bold,
+                text("  "),
+                text("Status") | bold,
             })
         );
         rows.push_back(separator());
@@ -176,7 +253,7 @@ int TuiApp::run() {
                 }
 
                 std::string id_str = std::to_string(t.id);
-                int title_budget = 33 - (int)prefix.size();
+                int title_budget = 22 - (int)prefix.size();
                 if (title_budget < 5) title_budget = 5;
                 std::string title = t.title.size() > (size_t)title_budget
                                       ? t.title.substr(0, title_budget - 1) + "\u2026"
@@ -194,15 +271,78 @@ int TuiApp::run() {
                     status_el,
                 });
 
-                if (i == selected_) row = row | inverted;
+                if (i == selected_)
+                    row = (focus_panel_ == 0) ? row | inverted : row | inverted | dim;
                 rows.push_back(row);
             }
         }
 
-        auto list_view = vbox(rows) | border;
+        auto left_panel = vbox({
+            text(" List") | bold,
+            separator(),
+            vbox(rows) | yframe,
+        }) | border | size(WIDTH, LESS_THAN, 50);
+
+        // Build right panel
+        Element right_panel;
+        if (modal_ == Modal::EditDetail && !items_.empty()) {
+            // Edit mode
+            const auto& t = items_[selected_].todo;
+            std::string cur_status = cfg_.statuses.empty()
+                ? t.status : cfg_.statuses[edit_status_idx_];
+            Element status_el = text(cur_status);
+            if      (cur_status == "todo")        status_el = status_el | color(Color::Blue);
+            else if (cur_status == "in_progress") status_el = status_el | color(Color::Yellow);
+            else if (cur_status == "done")        status_el = status_el | color(Color::Green);
+
+            right_panel = vbox({
+                text(" Edit") | bold | color(Color::Yellow),
+                separator(),
+                hbox({ text(" Title:   ") | bold, edit_title_input->Render() }),
+                hbox({ text(" Status:  ") | bold, status_el }),
+                separator(),
+                text(" Notes:") | bold,
+                edit_note_input->Render() | size(HEIGHT, GREATER_THAN, 4),
+                filler(),
+                separator(),
+                hbox({ edit_save_btn->Render(), text("  "), edit_cancel_btn->Render() }),
+                separator(),
+                text("  Tab:next  Enter:save  Esc:cancel") | dim,
+            }) | border | flex | color(Color::Yellow);
+        } else if (!items_.empty()) {
+            // Read-only detail
+            const auto& t = items_[selected_].todo;
+            Element status_el = text(t.status);
+            if      (t.status == "todo")        status_el = status_el | color(Color::Blue);
+            else if (t.status == "in_progress") status_el = status_el | color(Color::Yellow);
+            else if (t.status == "done")        status_el = status_el | color(Color::Green);
+
+            right_panel = vbox({
+                text(" Detail") | bold,
+                separator(),
+                hbox({ text(" Title:   ") | bold, text(t.title) }),
+                hbox({ text(" Status:  ") | bold, status_el }),
+                separator(),
+                text(" Notes:") | bold,
+                paragraph(t.ext_info.empty() ? "(none)" : t.ext_info) | dim,
+                filler(),
+                separator(),
+                hbox({ text(" Created: ") | dim, text(format_timestamp(t.create_time)) | dim }),
+                hbox({ text(" Updated: ") | dim, text(format_timestamp(t.update_time)) | dim }),
+            }) | border | flex;
+        } else {
+            right_panel = vbox({
+                text(" Detail") | bold,
+                separator(),
+                text("  (no selection)") | dim,
+                filler(),
+            }) | border | flex;
+        }
+
+        auto split_view = hbox({ left_panel, right_panel });
         auto title_line = text(" new_todo") | bold;
-        auto status_bar = text(" a:add-root  c:add-child  d:delete  s:cycle  j/k:\u2191\u2193  q:quit") | dim;
-        auto main_view = vbox({ title_line, list_view, status_bar });
+        auto status_bar = text(" a:add-root  c:add-child  d:del  s:cycle  u:edit  j/k:\u2191\u2193  q:quit") | dim;
+        auto main_view  = vbox({ title_line, split_view, status_bar });
 
         // Overlay modals
         if (modal_ == Modal::AddTodo) {
