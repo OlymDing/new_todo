@@ -172,7 +172,7 @@ int TuiApp::run() {
     auto edit_cancel_btn = Button(" Cancel ", [&] { cancel_edit(); });
     auto edit_btns       = Container::Horizontal({ edit_save_btn, edit_cancel_btn });
     auto edit_inputs_comp = Container::Vertical({
-        edit_title_input, edit_note_input, edit_due_input, edit_btns
+        edit_title_input, edit_due_input, edit_note_input, edit_btns
     });
 
     // ---- Tab container (0=main, 1=add, 2=delete, 3=edit) ----
