@@ -116,14 +116,30 @@ int TuiApp::run() {
 
     // ---- Add modal ----
     auto add_input = Input(&add_input_, "Title...");
-    int add_focus = 0;  // 0=input, 1=OK, 2=Cancel
+    InputOption add_note_opt;
+    add_note_opt.multiline = true;
+    auto add_note_input = Input(&add_note_, add_note_opt);
+    InputOption add_due_opt;
+    add_due_opt.multiline = false;
+    auto add_due_input = Input(&add_due_, add_due_opt);
+    int add_focus = 0;  // unused, kept for reference
     auto add_ok = Button("  OK  ", [&] {
         if (!add_input_.empty()) {
-            if (add_parent_id_ == 0)
-                svc_.addTodo(add_input_);
-            else
-                svc_.addChild(add_parent_id_, add_input_);
+            int64_t due = parse_due_date(add_due_);
+            if (add_parent_id_ == 0) {
+                int64_t id = svc_.addTodo(add_input_, "", add_note_);
+                if (due != 0)
+                    svc_.updateTodo(id, std::nullopt, std::nullopt, std::nullopt,
+                                    std::optional<Timestamp>(due));
+            } else {
+                int64_t id = svc_.addChild(add_parent_id_, add_input_, "", add_note_);
+                if (due != 0)
+                    svc_.updateTodo(id, std::nullopt, std::nullopt, std::nullopt,
+                                    std::optional<Timestamp>(due));
+            }
             add_input_.clear();
+            add_note_.clear();
+            add_due_.clear();
             refresh_todos();
         }
         modal_ = Modal::None;
@@ -131,11 +147,13 @@ int TuiApp::run() {
     });
     auto add_cancel = Button("Cancel", [&] {
         add_input_.clear();
+        add_note_.clear();
+        add_due_.clear();
         modal_ = Modal::None;
         tab_focus_ = 0;
     });
     auto add_buttons = Container::Horizontal({ add_ok, add_cancel });
-    auto add_comp = Container::Vertical({ add_input, add_buttons });
+    auto add_comp = Container::Vertical({ add_input, add_due_input, add_note_input, add_buttons });
 
     // ---- Delete modal ----
     auto del_yes = Button("  Yes  ", [&] {
@@ -388,10 +406,15 @@ int TuiApp::run() {
             auto modal_view = vbox({
                 text(modal_title) | bold,
                 separator(),
-                hbox({ text(" Title: "), add_input->Render() }),
+                hbox({ text(" Title: ") | bold, add_input->Render() }),
+                hbox({ text(" Due:   ") | bold, add_due_input->Render(),
+                       text("  YYYY-MM-DD") | dim }),
+                separator(),
+                text(" Notes:") | bold,
+                add_note_input->Render() | size(HEIGHT, GREATER_THAN, 3),
                 separator(),
                 hbox({ add_ok->Render(), text("  "), add_cancel->Render() }),
-            }) | border | size(WIDTH, EQUAL, 40) | center;
+            }) | border | size(WIDTH, EQUAL, 50) | center;
             return dbox({ main_view, modal_view | center });
         }
 

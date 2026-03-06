@@ -31,6 +31,8 @@ private:
     int                   selected_       = 0;
     Modal                 modal_          = Modal::None;
     std::string           add_input_;
+    std::string           add_note_;
+    std::string           add_due_;
     int64_t               delete_id_      = 0;
     int64_t               add_parent_id_  = 0;
 
