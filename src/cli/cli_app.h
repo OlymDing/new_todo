@@ -29,6 +29,7 @@ private:
                  const std::vector<std::string>& args);
 
     int run_loop(const std::string& prog);   // interactive REPL loop
+    int show_selector();                     // FTXUI selector: 0=TUI, 1=CLI
 };
 
 } // namespace cli

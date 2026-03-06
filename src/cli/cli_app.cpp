@@ -1,12 +1,17 @@
 #include "cli/cli_app.h"
 #include "cli/commands.h"
 #include "cli/formatter.h"
+#include "tui/tui_app.h"
 
 #include <iostream>
 #include <stdexcept>
 #include <unistd.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/dom/elements.hpp>
+using namespace ftxui;
 
 namespace cli {
 
@@ -29,7 +34,13 @@ int CliApp::run(int argc, char** argv) {
             return 2;
         }
     } else if (isatty(STDIN_FILENO)) {
-        return run_loop(prog);
+        int choice = show_selector();
+        if (choice == 0) {
+            tui::TuiApp tui_app(db_, cfg_);
+            return tui_app.run();
+        } else {
+            return run_loop(prog);
+        }
     } else {
         std::cerr << format_usage(prog);
         return 1;
@@ -176,6 +187,42 @@ int CliApp::dispatch(const std::string& cmd, const std::string& prog,
         std::cerr << format_usage(prog);
         return 1;
     }
+}
+
+int CliApp::show_selector() {
+    std::vector<std::string> entries = { "TUI", "CLI (interactive)" };
+    int selected = 0;
+    bool confirmed = false;
+
+    auto screen = ScreenInteractive::TerminalOutput();
+    auto menu = Menu(&entries, &selected);
+    auto evented = CatchEvent(menu, [&](Event ev) -> bool {
+        if (ev == Event::Return) {
+            confirmed = true;
+            screen.ExitLoopClosure()();
+            return true;
+        }
+        if (ev == Event::Escape) {
+            screen.ExitLoopClosure()();
+            return true;
+        }
+        return false;
+    });
+    auto renderer = Renderer(evented, [&, evented] {
+        return vbox({
+            text(""),
+            text("   new_todo") | bold,
+            text(""),
+            text("  Select interface:"),
+            evented->Render(),
+            text(""),
+            text("  \u2191\u2193 navigate   Enter confirm   Esc cancel") | dim,
+        }) | border | size(WIDTH, EQUAL, 35) | center;
+    });
+    screen.Loop(renderer);
+
+    if (!confirmed) return 1;  // Esc -> fall back to CLI
+    return selected;            // 0=TUI, 1=CLI
 }
 
 } // namespace cli

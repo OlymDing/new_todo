@@ -23,15 +23,23 @@ target("cli_lib")
     set_kind("static")
     add_files("src/cli/*.cpp")
     add_deps("todo_lib")
-    add_packages("readline")
+    add_packages("readline", "ftxui-component", "ftxui-dom", "ftxui-screen")
+    add_includedirs("src", "/usr/local/include")
+
+-- TUI layer library
+target("tui_lib")
+    set_kind("static")
+    add_files("src/tui/*.cpp")
+    add_deps("todo_lib")
+    add_packages("ftxui-component", "ftxui-dom", "ftxui-screen")
     add_includedirs("src", "/usr/local/include")
 
 -- main binary
 target("new_todo")
     set_kind("binary")
     add_files("src/main.cpp")
-    add_deps("cli_lib", "todo_lib")
-    add_packages("sqlite3", "readline")
+    add_deps("cli_lib", "tui_lib", "todo_lib")
+    add_packages("sqlite3", "readline", "ftxui-component", "ftxui-dom", "ftxui-screen")
     add_includedirs("src", "/usr/local/include")
 
 -- test targets (unchanged)
