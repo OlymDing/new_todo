@@ -3,6 +3,7 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <algorithm>
+#include <functional>
 using namespace ftxui;
 
 namespace tui {
@@ -11,12 +12,20 @@ TuiApp::TuiApp(Database& db, const AppConfig& cfg)
     : db_(db), cfg_(cfg), svc_(db_, cfg_) {}
 
 void TuiApp::refresh_todos() {
-    todos_ = svc_.listAll();
-    if (todos_.empty()) {
-        selected_ = 0;
-    } else if (selected_ >= (int)todos_.size()) {
-        selected_ = (int)todos_.size() - 1;
-    }
+    items_.clear();
+    std::function<void(const std::vector<TodoNode>&, int)> dfs =
+        [&](const std::vector<TodoNode>& nodes, int depth) {
+            for (size_t i = 0; i < nodes.size(); ++i) {
+                bool last = (i == nodes.size() - 1);
+                items_.push_back({ nodes[i].todo, depth, last });
+                dfs(nodes[i].children, depth + 1);
+            }
+        };
+    dfs(svc_.getTree(), 0);
+
+    if (items_.empty()) selected_ = 0;
+    else if (selected_ >= (int)items_.size())
+        selected_ = (int)items_.size() - 1;
 }
 
 std::string TuiApp::next_status(const std::string& current) const {
@@ -37,7 +46,10 @@ int TuiApp::run() {
     int add_focus = 0;  // 0=input, 1=OK, 2=Cancel
     auto add_ok = Button("  OK  ", [&] {
         if (!add_input_.empty()) {
-            svc_.addTodo(add_input_);
+            if (add_parent_id_ == 0)
+                svc_.addTodo(add_input_);
+            else
+                svc_.addChild(add_parent_id_, add_input_);
             add_input_.clear();
             refresh_todos();
         }
@@ -86,30 +98,40 @@ int TuiApp::run() {
 
         // Main list navigation
         if (ev == Event::ArrowUp || ev == Event::Character('k')) {
-            if (!todos_.empty() && selected_ > 0) --selected_;
+            if (!items_.empty() && selected_ > 0) --selected_;
             return true;
         }
         if (ev == Event::ArrowDown || ev == Event::Character('j')) {
-            if (!todos_.empty() && selected_ < (int)todos_.size() - 1) ++selected_;
+            if (!items_.empty() && selected_ < (int)items_.size() - 1) ++selected_;
             return true;
         }
         if (ev == Event::Character('a')) {
+            add_parent_id_ = 0;
             add_input_.clear();
             modal_ = Modal::AddTodo;
             tab_focus = 1;
             return true;
         }
+        if (ev == Event::Character('c')) {
+            if (!items_.empty()) {
+                add_parent_id_ = items_[selected_].todo.id;
+                add_input_.clear();
+                modal_ = Modal::AddTodo;
+                tab_focus = 1;
+            }
+            return true;
+        }
         if (ev == Event::Character('d')) {
-            if (!todos_.empty()) {
-                delete_id_ = todos_[selected_].id;
+            if (!items_.empty()) {
+                delete_id_ = items_[selected_].todo.id;
                 modal_ = Modal::ConfirmDelete;
                 tab_focus = 2;
             }
             return true;
         }
         if (ev == Event::Character('s')) {
-            if (!todos_.empty()) {
-                const auto& t = todos_[selected_];
+            if (!items_.empty()) {
+                const auto& t = items_[selected_].todo;
                 svc_.updateTodo(t.id, std::nullopt, next_status(t.status), std::nullopt);
                 refresh_todos();
             }
@@ -138,41 +160,57 @@ int TuiApp::run() {
         );
         rows.push_back(separator());
 
-        if (todos_.empty()) {
+        if (items_.empty()) {
             rows.push_back(text("  (no todos)") | dim);
         } else {
-            for (int i = 0; i < (int)todos_.size(); ++i) {
-                const auto& t = todos_[i];
-                std::string id_str  = std::to_string(t.id);
-                // pad / truncate title to 34 chars
-                std::string title   = t.title.size() > 34
-                                        ? t.title.substr(0, 33) + "\u2026"
-                                        : t.title;
-                std::string status  = t.status;
+            for (int i = 0; i < (int)items_.size(); ++i) {
+                const auto& item = items_[i];
+                const auto& t    = item.todo;
+
+                std::string prefix;
+                if (item.depth == 0) {
+                    prefix = "  ";
+                } else {
+                    prefix = std::string((item.depth - 1) * 2, ' ')
+                           + (item.last_child ? "\u2514\u2500 " : "\u251c\u2500 ");
+                }
+
+                std::string id_str = std::to_string(t.id);
+                int title_budget = 33 - (int)prefix.size();
+                if (title_budget < 5) title_budget = 5;
+                std::string title = t.title.size() > (size_t)title_budget
+                                      ? t.title.substr(0, title_budget - 1) + "\u2026"
+                                      : t.title;
+
+                Element status_el = text(t.status);
+                if      (t.status == "todo")        status_el = status_el | color(Color::Blue);
+                else if (t.status == "in_progress") status_el = status_el | color(Color::Yellow);
+                else if (t.status == "done")        status_el = status_el | color(Color::Green);
 
                 auto row = hbox({
-                    text(std::string(4 - id_str.size(), ' ') + id_str + "  "),
-                    text(title + std::string(35 - title.size(), ' ')),
-                    text(" "),
-                    text(status),
+                    text(std::string(4 - id_str.size(), ' ') + id_str + " "),
+                    text(prefix) | (item.depth > 0 ? dim : nothing),
+                    text(title + std::string(title_budget - (int)title.size() + 1, ' ')),
+                    status_el,
                 });
 
-                if (i == selected_) {
-                    row = row | inverted;
-                }
+                if (i == selected_) row = row | inverted;
                 rows.push_back(row);
             }
         }
 
         auto list_view = vbox(rows) | border;
         auto title_line = text(" new_todo") | bold;
-        auto status_bar = text(" a:add  d:delete  s:cycle-status  j/k:\u2191\u2193  q:quit") | dim;
+        auto status_bar = text(" a:add-root  c:add-child  d:delete  s:cycle  j/k:\u2191\u2193  q:quit") | dim;
         auto main_view = vbox({ title_line, list_view, status_bar });
 
         // Overlay modals
         if (modal_ == Modal::AddTodo) {
+            std::string modal_title = (add_parent_id_ == 0)
+                ? " Add Root Todo"
+                : " Add Child Todo";
             auto modal_view = vbox({
-                text(" Add Todo") | bold,
+                text(modal_title) | bold,
                 separator(),
                 hbox({ text(" Title: "), add_input->Render() }),
                 separator(),
@@ -182,8 +220,8 @@ int TuiApp::run() {
         }
 
         if (modal_ == Modal::ConfirmDelete) {
-            std::string del_title = (delete_id_ > 0 && !todos_.empty())
-                ? todos_[selected_].title
+            std::string del_title = (delete_id_ > 0 && !items_.empty())
+                ? items_[selected_].todo.title
                 : "";
             auto modal_view = vbox({
                 text(" Delete Todo") | bold,
