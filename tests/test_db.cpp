@@ -34,6 +34,7 @@ TEST_F(DbTest, InsertAndGet) {
     EXPECT_EQ(got->title, "Buy milk");
     EXPECT_EQ(got->parent_id, 0);
     EXPECT_EQ(got->status, "todo");
+    EXPECT_EQ(got->due_time, 0);
 }
 
 TEST_F(DbTest, GetMissingReturnsNullopt) {
@@ -67,6 +68,7 @@ TEST_F(DbTest, UpdateTodo) {
     ASSERT_TRUE(t.has_value());
     t->title       = "Updated";
     t->status      = "done";
+    t->due_time    = 9999;
     t->update_time = 2000;
     bool ok = db.updateTodo(*t);
     EXPECT_TRUE(ok);
@@ -75,6 +77,7 @@ TEST_F(DbTest, UpdateTodo) {
     ASSERT_TRUE(got.has_value());
     EXPECT_EQ(got->title, "Updated");
     EXPECT_EQ(got->status, "done");
+    EXPECT_EQ(got->due_time, 9999);
 }
 
 TEST_F(DbTest, UpdateNonExistentReturnsFalse) {

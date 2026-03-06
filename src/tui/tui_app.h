@@ -37,6 +37,7 @@ private:
     // edit buffers
     std::string  edit_title_;
     std::string  edit_ext_info_;
+    std::string  edit_due_;          // "YYYY-MM-DD" or "" for no due date
     int          edit_status_idx_ = 0;
 
     // panel/tab focus
@@ -50,6 +51,8 @@ private:
     void        commit_edit();
     void        cancel_edit();
     std::string format_timestamp(int64_t ts) const;
+    std::string format_date(int64_t ts) const;      // "YYYY-MM-DD" or ""
+    int64_t     parse_due_date(const std::string& s) const; // 0 on empty/invalid
 };
 
 } // namespace tui

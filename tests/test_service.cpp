@@ -119,3 +119,23 @@ TEST_F(ServiceTest, ExtInfoStoredAndRetrieved) {
     ASSERT_TRUE(t.has_value());
     EXPECT_EQ(t->ext_info, "some note");
 }
+
+TEST_F(ServiceTest, DueTimeStoredAndRetrieved) {
+    int64_t id = svc.addTodo("Task with due");
+    svc.updateTodo(id, std::nullopt, std::nullopt, std::nullopt,
+                   std::optional<Timestamp>(1234567890));
+    auto t = svc.findById(id);
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->due_time, 1234567890);
+}
+
+TEST_F(ServiceTest, DueTimeClearedWithZero) {
+    int64_t id = svc.addTodo("Task");
+    svc.updateTodo(id, std::nullopt, std::nullopt, std::nullopt,
+                   std::optional<Timestamp>(9999));
+    svc.updateTodo(id, std::nullopt, std::nullopt, std::nullopt,
+                   std::optional<Timestamp>(0));
+    auto t = svc.findById(id);
+    ASSERT_TRUE(t.has_value());
+    EXPECT_EQ(t->due_time, 0);
+}

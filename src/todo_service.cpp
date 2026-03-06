@@ -48,7 +48,8 @@ int64_t TodoService::addChild(int64_t parent_id, const std::string& title,
 void TodoService::updateTodo(int64_t id,
                               std::optional<std::string> title,
                               std::optional<std::string> status,
-                              std::optional<std::string> ext_info) {
+                              std::optional<std::string> ext_info,
+                              std::optional<Timestamp>   due_time) {
     auto existing = db_.getTodo(id);
     if (!existing.has_value()) {
         throw std::invalid_argument("Todo not found: " + std::to_string(id));
@@ -66,6 +67,9 @@ void TodoService::updateTodo(int64_t id,
     }
     if (ext_info.has_value()) {
         t.ext_info = *ext_info;
+    }
+    if (due_time.has_value()) {
+        t.due_time = *due_time;
     }
     t.update_time = now_timestamp();
     db_.updateTodo(t);

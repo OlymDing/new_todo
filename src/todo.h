@@ -14,6 +14,7 @@ struct Todo {
     std::string ext_info;
     Timestamp   create_time = 0;
     Timestamp   update_time = 0;
+    Timestamp   due_time    = 0;   // 0 = no due date
 
     bool isRootLevel() const { return parent_id == 0; }
 };

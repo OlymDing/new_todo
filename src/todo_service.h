@@ -24,7 +24,8 @@ public:
     void updateTodo(int64_t                       id,
                     std::optional<std::string>    title,
                     std::optional<std::string>    status,
-                    std::optional<std::string>    ext_info);
+                    std::optional<std::string>    ext_info,
+                    std::optional<Timestamp>      due_time = std::nullopt);
 
     void deleteTodo(int64_t id);
 

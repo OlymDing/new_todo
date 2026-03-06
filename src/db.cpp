@@ -43,7 +43,8 @@ void Database::initSchema() {
             status      TEXT    NOT NULL DEFAULT 'todo',
             ext_info    TEXT    NOT NULL DEFAULT '',
             create_time INTEGER NOT NULL,
-            update_time INTEGER NOT NULL
+            update_time INTEGER NOT NULL,
+            due_time    INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_todos_parent_id ON todos(parent_id);
     )sql";
@@ -54,6 +55,12 @@ void Database::initSchema() {
         sqlite3_free(errmsg);
         throw std::runtime_error("Schema init failed: " + e);
     }
+    // Migrate existing databases that lack the due_time column (ignore error if
+    // the column already exists — SQLite does not support ADD COLUMN IF NOT EXISTS
+    // before version 3.37).
+    sqlite3_exec(db_,
+        "ALTER TABLE todos ADD COLUMN due_time INTEGER NOT NULL DEFAULT 0;",
+        nullptr, nullptr, nullptr);
 }
 
 // ── row deserialisation ───────────────────────────────────────────────────────
@@ -76,6 +83,7 @@ Todo Database::rowToTodo(sqlite3_stmt* stmt) const {
     t.ext_info    = text(4);
     t.create_time = sqlite3_column_int64(stmt, 5);
     t.update_time = sqlite3_column_int64(stmt, 6);
+    t.due_time    = sqlite3_column_int64(stmt, 7);
     return t;
 }
 
@@ -83,8 +91,8 @@ Todo Database::rowToTodo(sqlite3_stmt* stmt) const {
 
 int64_t Database::insertTodo(const Todo& todo) {
     const char* sql =
-        "INSERT INTO todos (parent_id, title, status, ext_info, create_time, update_time) "
-        "VALUES (?, ?, ?, ?, ?, ?)";
+        "INSERT INTO todos (parent_id, title, status, ext_info, create_time, update_time, due_time) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)";
     sqlite3_stmt* stmt = nullptr;
     check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare insert");
 
@@ -99,6 +107,7 @@ int64_t Database::insertTodo(const Todo& todo) {
     sqlite3_bind_text(stmt, 4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 5, todo.create_time);
     sqlite3_bind_int64(stmt, 6, todo.update_time);
+    sqlite3_bind_int64(stmt, 7, todo.due_time);
 
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -110,7 +119,7 @@ int64_t Database::insertTodo(const Todo& todo) {
 
 std::optional<Todo> Database::getTodo(int64_t id) const {
     const char* sql =
-        "SELECT id,parent_id,title,status,ext_info,create_time,update_time "
+        "SELECT id,parent_id,title,status,ext_info,create_time,update_time,due_time "
         "FROM todos WHERE id=?";
     sqlite3_stmt* stmt = nullptr;
     check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getTodo");
@@ -125,7 +134,7 @@ std::optional<Todo> Database::getTodo(int64_t id) const {
 
 std::vector<Todo> Database::getChildren(int64_t parent_id) const {
     std::string sql =
-        "SELECT id,parent_id,title,status,ext_info,create_time,update_time "
+        "SELECT id,parent_id,title,status,ext_info,create_time,update_time,due_time "
         "FROM todos WHERE ";
     sqlite3_stmt* stmt = nullptr;
     if (parent_id == 0) {
@@ -146,7 +155,7 @@ std::vector<Todo> Database::getChildren(int64_t parent_id) const {
 
 std::vector<Todo> Database::getAllTodos() const {
     const char* sql =
-        "SELECT id,parent_id,title,status,ext_info,create_time,update_time FROM todos";
+        "SELECT id,parent_id,title,status,ext_info,create_time,update_time,due_time FROM todos";
     sqlite3_stmt* stmt = nullptr;
     check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getAllTodos");
     std::vector<Todo> result;
@@ -159,7 +168,7 @@ std::vector<Todo> Database::getAllTodos() const {
 
 bool Database::updateTodo(const Todo& todo) {
     const char* sql =
-        "UPDATE todos SET parent_id=?, title=?, status=?, ext_info=?, update_time=? "
+        "UPDATE todos SET parent_id=?, title=?, status=?, ext_info=?, update_time=?, due_time=? "
         "WHERE id=?";
     sqlite3_stmt* stmt = nullptr;
     check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare updateTodo");
@@ -173,7 +182,8 @@ bool Database::updateTodo(const Todo& todo) {
     sqlite3_bind_text(stmt,  3, todo.status.c_str(),   -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt,  4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 5, todo.update_time);
-    sqlite3_bind_int64(stmt, 6, todo.id);
+    sqlite3_bind_int64(stmt, 6, todo.due_time);
+    sqlite3_bind_int64(stmt, 7, todo.id);
 
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);

@@ -41,6 +41,7 @@ void TuiApp::begin_edit() {
     const auto& t  = items_[selected_].todo;
     edit_title_    = t.title;
     edit_ext_info_ = t.ext_info;
+    edit_due_      = format_date(t.due_time);
     const auto& sv = cfg_.statuses;
     auto it = std::find(sv.begin(), sv.end(), t.status);
     edit_status_idx_ = (it != sv.end()) ? (int)(it - sv.begin()) : 0;
@@ -54,11 +55,13 @@ void TuiApp::commit_edit() {
         const auto& t = items_[selected_].todo;
         std::string new_status = cfg_.statuses.empty()
             ? t.status : cfg_.statuses[edit_status_idx_];
+        int64_t new_due = parse_due_date(edit_due_);
         svc_.updateTodo(t.id,
             edit_title_.empty() ? std::nullopt
                                 : std::optional<std::string>(edit_title_),
             new_status,
-            edit_ext_info_);
+            edit_ext_info_,
+            std::optional<Timestamp>(new_due));
         refresh_todos();
     }
     cancel_edit();
@@ -67,6 +70,7 @@ void TuiApp::commit_edit() {
 void TuiApp::cancel_edit() {
     edit_title_.clear();
     edit_ext_info_.clear();
+    edit_due_.clear();
     edit_status_idx_ = 0;
     modal_       = Modal::None;
     tab_focus_   = 0;
@@ -79,6 +83,30 @@ std::string TuiApp::format_timestamp(int64_t ts) const {
     char buf[32];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", std::localtime(&t));
     return buf;
+}
+
+std::string TuiApp::format_date(int64_t ts) const {
+    if (ts == 0) return "";
+    std::time_t t = (std::time_t)ts;
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::localtime(&t));
+    return buf;
+}
+
+int64_t TuiApp::parse_due_date(const std::string& s) const {
+    if (s.empty()) return 0;
+    std::tm tm = {};
+    // Accept "YYYY-MM-DD"
+    if (std::sscanf(s.c_str(), "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) != 3)
+        return 0;
+    tm.tm_year -= 1900;
+    tm.tm_mon  -= 1;
+    tm.tm_hour  = 0;
+    tm.tm_min   = 0;
+    tm.tm_sec   = 0;
+    tm.tm_isdst = -1;
+    std::time_t ts = std::mktime(&tm);
+    return (ts == (std::time_t)-1) ? 0 : (int64_t)ts;
 }
 
 int TuiApp::run() {
@@ -136,11 +164,15 @@ int TuiApp::run() {
     note_opt.multiline = true;
     auto edit_note_input = Input(&edit_ext_info_, note_opt);
 
+    InputOption due_opt;
+    due_opt.multiline = false;
+    auto edit_due_input = Input(&edit_due_, due_opt);
+
     auto edit_save_btn   = Button("  Save  ", [&] { commit_edit(); });
     auto edit_cancel_btn = Button(" Cancel ", [&] { cancel_edit(); });
     auto edit_btns       = Container::Horizontal({ edit_save_btn, edit_cancel_btn });
     auto edit_inputs_comp = Container::Vertical({
-        edit_title_input, edit_note_input, edit_btns
+        edit_title_input, edit_note_input, edit_due_input, edit_btns
     });
 
     // ---- Tab container (0=main, 1=add, 2=delete, 3=edit) ----
@@ -300,6 +332,8 @@ int TuiApp::run() {
                 separator(),
                 hbox({ text(" Title:   ") | bold, edit_title_input->Render() }),
                 hbox({ text(" Status:  ") | bold, status_el }),
+                hbox({ text(" Due:     ") | bold, edit_due_input->Render(),
+                       text("  YYYY-MM-DD") | dim }),
                 separator(),
                 text(" Notes:") | bold,
                 edit_note_input->Render() | size(HEIGHT, GREATER_THAN, 4),
@@ -322,6 +356,8 @@ int TuiApp::run() {
                 separator(),
                 hbox({ text(" Title:   ") | bold, text(t.title) }),
                 hbox({ text(" Status:  ") | bold, status_el }),
+                hbox({ text(" Due:     ") | bold,
+                       text(t.due_time == 0 ? "(none)" : format_date(t.due_time)) }),
                 separator(),
                 text(" Notes:") | bold,
                 paragraph(t.ext_info.empty() ? "(none)" : t.ext_info) | dim,
