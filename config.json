@@ -1,0 +1,5 @@
+{
+  "statuses": ["todo", "in_progress", "done"],
+  "default_status": "todo",
+  "db_path": "todo.db"
+}
