@@ -244,6 +244,15 @@ int CliApp::dispatch(
     }
     return cmd_change_parent(svc_, std::stoll(args[0]), std::stoll(args[1]));
   }
+  else if (cmd == "search")
+  {
+    if (args.empty())
+    {
+      std::cerr << "search requires <query>\n";
+      return 1;
+    }
+    return cmd_search(svc_, args[0]);
+  }
   else if (cmd == "show")
   {
     if (args.empty())

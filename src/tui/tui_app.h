@@ -16,7 +16,8 @@ enum class Modal
   AddTodo,
   ConfirmDelete,
   EditDetail,
-  ChangeParent
+  ChangeParent,
+  Search
 };
 
 struct FlatItem
@@ -46,6 +47,11 @@ private:
   int64_t delete_id_ = 0;
   int64_t add_parent_id_ = 0;
   std::string cp_input_; // change-parent: new parent id input
+
+  // search state
+  std::string        search_query_;
+  std::vector<Todo>  search_results_;
+  int                search_selected_ = 0;
 
   // edit buffers
   std::string edit_title_;

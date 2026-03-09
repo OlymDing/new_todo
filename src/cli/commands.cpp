@@ -97,6 +97,21 @@ int cmd_change_parent(TodoService &svc, int64_t id, int64_t new_parent_id)
   return 0;
 }
 
+int cmd_search(TodoService &svc, const std::string &query)
+{
+  auto results = svc.search(query);
+  if (results.empty())
+  {
+    std::cout << "(no results)\n";
+  }
+  else
+  {
+    for (const auto &t : results)
+      std::cout << format_todo(t);
+  }
+  return 0;
+}
+
 int cmd_show(TodoService &svc, int64_t id)
 {
   auto t = svc.findById(id);

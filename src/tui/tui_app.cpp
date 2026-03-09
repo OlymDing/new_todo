@@ -280,10 +280,24 @@ int TuiApp::run()
       {edit_title_input, edit_due_input, edit_note_input, edit_btns}
   );
 
-  // ---- Tab container (0=main, 1=add, 2=delete, 3=edit, 4=change-parent) ----
+  // ---- Tab container (0=main, 1=add, 2=delete, 3=edit, 4=change-parent, 5=search) ----
+  // Search input component — onChange triggers a live FTS query.
+  InputOption search_opt;
+  search_opt.multiline = false;
+  search_opt.on_change = [&]
+  {
+    search_selected_ = 0;
+    search_results_ = search_query_.empty()
+                          ? std::vector<Todo>{}
+                          : svc_.search(search_query_);
+  };
+  auto search_input_comp = Input(&search_query_, "Search...", search_opt);
+  auto search_comp       = Container::Vertical({search_input_comp});
+
   auto dummy = Renderer([] { return text(""); });
   auto tab_container = Container::Tab(
-      {dummy, add_comp, del_comp, edit_inputs_comp, cp_comp}, &tab_focus_
+      {dummy, add_comp, del_comp, edit_inputs_comp, cp_comp, search_comp},
+      &tab_focus_
   );
 
   // ---- Global event handler ----
@@ -314,6 +328,53 @@ int TuiApp::run()
             tab_focus_ = 0;
             return true;
           }
+          if (modal_ == Modal::Search)
+          {
+            search_query_.clear();
+            search_results_.clear();
+            search_selected_ = 0;
+            modal_ = Modal::None;
+            tab_focus_ = 0;
+            return true;
+          }
+          return false;
+        }
+
+        // Search modal: handle navigation and confirm inside the modal.
+        if (modal_ == Modal::Search)
+        {
+          if (ev == Event::ArrowUp)
+          {
+            if (search_selected_ > 0)
+              --search_selected_;
+            return true;
+          }
+          if (ev == Event::ArrowDown)
+          {
+            if (search_selected_ < (int)search_results_.size() - 1)
+              ++search_selected_;
+            return true;
+          }
+          if (ev == Event::Return && !search_results_.empty())
+          {
+            // Jump to the selected result in the main list.
+            int64_t target = search_results_[search_selected_].id;
+            for (int i = 0; i < (int)items_.size(); ++i)
+            {
+              if (items_[i].todo.id == target)
+              {
+                selected_ = i;
+                break;
+              }
+            }
+            search_query_.clear();
+            search_results_.clear();
+            search_selected_ = 0;
+            modal_ = Modal::None;
+            tab_focus_ = 0;
+            return true;
+          }
+          // All other keys (typing) pass through to search_input_comp.
           return false;
         }
 
@@ -396,6 +457,15 @@ int TuiApp::run()
             modal_ = Modal::ChangeParent;
             tab_focus_ = 4;
           }
+          return true;
+        }
+        if (ev == Event::Character('/'))
+        {
+          search_query_.clear();
+          search_results_.clear();
+          search_selected_ = 0;
+          modal_ = Modal::Search;
+          tab_focus_ = 5;
           return true;
         }
         if (ev == Event::Character('q'))
@@ -582,7 +652,7 @@ int TuiApp::run()
         auto title_line = text(" new_todo") | bold;
         auto status_bar = text(
                               " a:add-root  c:add-child  d:del  s:cycle  "
-                              "u:edit  p:parent  j/k:\u2191\u2193  q:quit"
+                              "u:edit  p:parent  /:search  j/k:\u2191\u2193  q:quit"
                           ) |
                           dim;
         auto main_view = vbox({title_line, split_view, status_bar});
@@ -648,6 +718,59 @@ int TuiApp::run()
                   hbox({cp_ok->Render(), text("  "), cp_cancel->Render()}),
               }) |
               border | size(WIDTH, EQUAL, 50) | center;
+          return dbox({main_view, clear_under(modal_view | center)});
+        }
+
+        if (modal_ == Modal::Search)
+        {
+          Elements result_rows;
+          if (search_results_.empty())
+          {
+            result_rows.push_back(
+                text(search_query_.empty() ? "  Type to search…"
+                                           : "  (no results)") |
+                dim
+            );
+          }
+          else
+          {
+            for (int i = 0; i < (int)search_results_.size(); ++i)
+            {
+              const auto &t = search_results_[i];
+              Element status_el = text(t.status);
+              if (t.status == "todo")
+                status_el = status_el | color(Color::Blue);
+              else if (t.status == "in_progress")
+                status_el = status_el | color(Color::Yellow);
+              else if (t.status == "done")
+                status_el = status_el | color(Color::Green);
+
+              auto row = hbox({
+                  text(" #" + std::to_string(t.id) + " ") | dim,
+                  text(t.title) | flex,
+                  text("  "),
+                  status_el,
+                  text(" "),
+              });
+              if (i == search_selected_)
+                row = row | inverted;
+              result_rows.push_back(row);
+            }
+          }
+
+          auto modal_view =
+              vbox({
+                  text(" Search") | bold,
+                  separator(),
+                  hbox({text(" / ") | bold, search_input_comp->Render()}),
+                  separator(),
+                  vbox(result_rows) | size(HEIGHT, LESS_THAN, 12),
+                  separator(),
+                  text(
+                      "  \u2191\u2193 navigate   Enter:jump   Esc:close"
+                  ) | dim,
+              }) |
+              border | size(WIDTH, EQUAL, 55) | center;
           return dbox({main_view, clear_under(modal_view | center)});
         }
 

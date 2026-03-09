@@ -166,3 +166,10 @@ std::optional<Todo> TodoService::findById(int64_t id) const
 {
   return db_.getTodo(id);
 }
+
+std::vector<Todo> TodoService::search(const std::string &query) const
+{
+  if (query.empty())
+    return {};
+  return db_.searchTodos(query);
+}

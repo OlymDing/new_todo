@@ -38,6 +38,7 @@ public:
   std::vector<Todo> listByStatus(const std::string &s) const;
   std::vector<TodoNode> getTree() const;
   std::optional<Todo> findById(int64_t id) const;
+  std::vector<Todo> search(const std::string &query) const;
 
 private:
   Database &db_;

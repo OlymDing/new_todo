@@ -75,6 +75,8 @@ std::string format_usage(const std::string &prog)
          prog +
          " change-parent <id> <new_parent_id>  (0 = make root)\n"
          "  " +
+         prog + " search <query>\n"
+         "  " +
          prog + " show <id>\n";
 }
 
