@@ -5,37 +5,46 @@
 #include <stdexcept>
 #include <unordered_map>
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers
+// ───────────────────────────────────────────────────────────────────
 
-static void check(int rc, const std::string& msg) {
-    if (rc != SQLITE_OK && rc != SQLITE_DONE && rc != SQLITE_ROW) {
-        throw std::runtime_error(msg + ": " + std::to_string(rc));
-    }
+static void check(int rc, const std::string &msg)
+{
+  if (rc != SQLITE_OK && rc != SQLITE_DONE && rc != SQLITE_ROW)
+  {
+    throw std::runtime_error(msg + ": " + std::to_string(rc));
+  }
 }
 
-// ── construction / destruction ────────────────────────────────────────────────
+// ── construction / destruction
+// ────────────────────────────────────────────────
 
-Database::Database(const std::string& path) {
-    int rc = sqlite3_open(path.c_str(), &db_);
-    if (rc != SQLITE_OK) {
-        std::string err = sqlite3_errmsg(db_);
-        sqlite3_close(db_);
-        throw std::runtime_error("Cannot open database '" + path + "': " + err);
-    }
-    // Enable foreign keys
-    sqlite3_exec(db_, "PRAGMA foreign_keys = ON;", nullptr, nullptr, nullptr);
-    initSchema();
+Database::Database(const std::string &path)
+{
+  int rc = sqlite3_open(path.c_str(), &db_);
+  if (rc != SQLITE_OK)
+  {
+    std::string err = sqlite3_errmsg(db_);
+    sqlite3_close(db_);
+    throw std::runtime_error("Cannot open database '" + path + "': " + err);
+  }
+  // Enable foreign keys
+  sqlite3_exec(db_, "PRAGMA foreign_keys = ON;", nullptr, nullptr, nullptr);
+  initSchema();
 }
 
-Database::~Database() {
-    if (db_) {
-        sqlite3_close(db_);
-        db_ = nullptr;
-    }
+Database::~Database()
+{
+  if (db_)
+  {
+    sqlite3_close(db_);
+    db_ = nullptr;
+  }
 }
 
-void Database::initSchema() {
-    const char* sql = R"sql(
+void Database::initSchema()
+{
+  const char *sql = R"sql(
         CREATE TABLE IF NOT EXISTS todos (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             parent_id   INTEGER REFERENCES todos(id),
@@ -48,224 +57,280 @@ void Database::initSchema() {
         );
         CREATE INDEX IF NOT EXISTS idx_todos_parent_id ON todos(parent_id);
     )sql";
-    char* errmsg = nullptr;
-    int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &errmsg);
-    if (rc != SQLITE_OK) {
-        std::string e = errmsg ? errmsg : "unknown";
-        sqlite3_free(errmsg);
-        throw std::runtime_error("Schema init failed: " + e);
-    }
-    // Migrate existing databases that lack the due_time column (ignore error if
-    // the column already exists — SQLite does not support ADD COLUMN IF NOT EXISTS
-    // before version 3.37).
-    sqlite3_exec(db_,
-        "ALTER TABLE todos ADD COLUMN due_time INTEGER NOT NULL DEFAULT 0;",
-        nullptr, nullptr, nullptr);
+  char *errmsg = nullptr;
+  int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &errmsg);
+  if (rc != SQLITE_OK)
+  {
+    std::string e = errmsg ? errmsg : "unknown";
+    sqlite3_free(errmsg);
+    throw std::runtime_error("Schema init failed: " + e);
+  }
+  // Migrate existing databases that lack the due_time column (ignore error if
+  // the column already exists — SQLite does not support ADD COLUMN IF NOT
+  // EXISTS before version 3.37).
+  sqlite3_exec(
+      db_, "ALTER TABLE todos ADD COLUMN due_time INTEGER NOT NULL DEFAULT 0;",
+      nullptr, nullptr, nullptr
+  );
 }
 
-// ── row deserialisation ───────────────────────────────────────────────────────
+// ── row deserialisation
+// ───────────────────────────────────────────────────────
 
-Todo Database::rowToTodo(sqlite3_stmt* stmt) const {
-    Todo t;
-    t.id          = sqlite3_column_int64(stmt, 0);
-    // parent_id is NULL for root-level nodes; map NULL → 0
-    if (sqlite3_column_type(stmt, 1) == SQLITE_NULL) {
-        t.parent_id = 0;
-    } else {
-        t.parent_id = sqlite3_column_int64(stmt, 1);
-    }
-    auto text = [&](int col) -> std::string {
-        const unsigned char* p = sqlite3_column_text(stmt, col);
-        return p ? reinterpret_cast<const char*>(p) : "";
-    };
-    t.title       = text(2);
-    t.status      = text(3);
-    t.ext_info    = text(4);
-    t.create_time = sqlite3_column_int64(stmt, 5);
-    t.update_time = sqlite3_column_int64(stmt, 6);
-    t.due_time    = sqlite3_column_int64(stmt, 7);
-    return t;
+Todo Database::rowToTodo(sqlite3_stmt *stmt) const
+{
+  Todo t;
+  t.id = sqlite3_column_int64(stmt, 0);
+  // parent_id is NULL for root-level nodes; map NULL → 0
+  if (sqlite3_column_type(stmt, 1) == SQLITE_NULL)
+  {
+    t.parent_id = 0;
+  }
+  else
+  {
+    t.parent_id = sqlite3_column_int64(stmt, 1);
+  }
+  auto text = [&](int col) -> std::string
+  {
+    const unsigned char *p = sqlite3_column_text(stmt, col);
+    return p ? reinterpret_cast<const char *>(p) : "";
+  };
+  t.title = text(2);
+  t.status = text(3);
+  t.ext_info = text(4);
+  t.create_time = sqlite3_column_int64(stmt, 5);
+  t.update_time = sqlite3_column_int64(stmt, 6);
+  t.due_time = sqlite3_column_int64(stmt, 7);
+  return t;
 }
 
-// ── CRUD ──────────────────────────────────────────────────────────────────────
+// ── CRUD
+// ──────────────────────────────────────────────────────────────────────
 
-int64_t Database::insertTodo(const Todo& todo) {
-    const char* sql =
-        "INSERT INTO todos (parent_id, title, status, ext_info, create_time, update_time, due_time) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)";
-    sqlite3_stmt* stmt = nullptr;
-    check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare insert");
+int64_t Database::insertTodo(const Todo &todo)
+{
+  const char *sql = "INSERT INTO todos (parent_id, title, status, ext_info, "
+                    "create_time, update_time, due_time) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)";
+  sqlite3_stmt *stmt = nullptr;
+  check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare insert");
 
-    // parent_id: 0 → NULL
-    if (todo.parent_id == 0) {
-        sqlite3_bind_null(stmt, 1);
-    } else {
-        sqlite3_bind_int64(stmt, 1, todo.parent_id);
-    }
-    sqlite3_bind_text(stmt, 2, todo.title.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, todo.status.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 5, todo.create_time);
-    sqlite3_bind_int64(stmt, 6, todo.update_time);
-    sqlite3_bind_int64(stmt, 7, todo.due_time);
+  // parent_id: 0 → NULL
+  if (todo.parent_id == 0)
+  {
+    sqlite3_bind_null(stmt, 1);
+  }
+  else
+  {
+    sqlite3_bind_int64(stmt, 1, todo.parent_id);
+  }
+  sqlite3_bind_text(stmt, 2, todo.title.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, todo.status.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 5, todo.create_time);
+  sqlite3_bind_int64(stmt, 6, todo.update_time);
+  sqlite3_bind_int64(stmt, 7, todo.due_time);
 
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    if (rc != SQLITE_DONE) {
-        throw std::runtime_error("insertTodo failed: " + std::to_string(rc));
-    }
-    return sqlite3_last_insert_rowid(db_);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE)
+  {
+    throw std::runtime_error("insertTodo failed: " + std::to_string(rc));
+  }
+  return sqlite3_last_insert_rowid(db_);
 }
 
-std::optional<Todo> Database::getTodo(int64_t id) const {
-    const char* sql =
-        "SELECT id,parent_id,title,status,ext_info,create_time,update_time,due_time "
-        "FROM todos WHERE id=?";
-    sqlite3_stmt* stmt = nullptr;
-    check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getTodo");
-    sqlite3_bind_int64(stmt, 1, id);
-    std::optional<Todo> result;
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        result = rowToTodo(stmt);
-    }
-    sqlite3_finalize(stmt);
-    return result;
+std::optional<Todo> Database::getTodo(int64_t id) const
+{
+  const char *sql =
+      "SELECT "
+      "id,parent_id,title,status,ext_info,create_time,update_time,due_time "
+      "FROM todos WHERE id=?";
+  sqlite3_stmt *stmt = nullptr;
+  check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getTodo");
+  sqlite3_bind_int64(stmt, 1, id);
+  std::optional<Todo> result;
+  if (sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    result = rowToTodo(stmt);
+  }
+  sqlite3_finalize(stmt);
+  return result;
 }
 
-std::vector<Todo> Database::getChildren(int64_t parent_id) const {
-    std::string sql =
-        "SELECT id,parent_id,title,status,ext_info,create_time,update_time,due_time "
-        "FROM todos WHERE ";
-    sqlite3_stmt* stmt = nullptr;
-    if (parent_id == 0) {
-        sql += "parent_id IS NULL";
-        check(sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr), "prepare getChildren");
-    } else {
-        sql += "parent_id=?";
-        check(sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr), "prepare getChildren");
-        sqlite3_bind_int64(stmt, 1, parent_id);
-    }
-    std::vector<Todo> result;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        result.push_back(rowToTodo(stmt));
-    }
-    sqlite3_finalize(stmt);
-    return result;
+std::vector<Todo> Database::getChildren(int64_t parent_id) const
+{
+  std::string sql =
+      "SELECT "
+      "id,parent_id,title,status,ext_info,create_time,update_time,due_time "
+      "FROM todos WHERE ";
+  sqlite3_stmt *stmt = nullptr;
+  if (parent_id == 0)
+  {
+    sql += "parent_id IS NULL";
+    check(
+        sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr),
+        "prepare getChildren"
+    );
+  }
+  else
+  {
+    sql += "parent_id=?";
+    check(
+        sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr),
+        "prepare getChildren"
+    );
+    sqlite3_bind_int64(stmt, 1, parent_id);
+  }
+  std::vector<Todo> result;
+  while (sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    result.push_back(rowToTodo(stmt));
+  }
+  sqlite3_finalize(stmt);
+  return result;
 }
 
-std::vector<Todo> Database::getAllTodos() const {
-    const char* sql =
-        "SELECT id,parent_id,title,status,ext_info,create_time,update_time,due_time FROM todos";
-    sqlite3_stmt* stmt = nullptr;
-    check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getAllTodos");
-    std::vector<Todo> result;
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        result.push_back(rowToTodo(stmt));
-    }
-    sqlite3_finalize(stmt);
-    return result;
+std::vector<Todo> Database::getAllTodos() const
+{
+  const char *sql = "SELECT "
+                    "id,parent_id,title,status,ext_info,create_time,update_"
+                    "time,due_time FROM todos";
+  sqlite3_stmt *stmt = nullptr;
+  check(
+      sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getAllTodos"
+  );
+  std::vector<Todo> result;
+  while (sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    result.push_back(rowToTodo(stmt));
+  }
+  sqlite3_finalize(stmt);
+  return result;
 }
 
-bool Database::updateTodo(const Todo& todo) {
-    const char* sql =
-        "UPDATE todos SET parent_id=?, title=?, status=?, ext_info=?, update_time=?, due_time=? "
-        "WHERE id=?";
-    sqlite3_stmt* stmt = nullptr;
-    check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare updateTodo");
+bool Database::updateTodo(const Todo &todo)
+{
+  const char *sql = "UPDATE todos SET parent_id=?, title=?, status=?, "
+                    "ext_info=?, update_time=?, due_time=? "
+                    "WHERE id=?";
+  sqlite3_stmt *stmt = nullptr;
+  check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare updateTodo");
 
-    if (todo.parent_id == 0) {
-        sqlite3_bind_null(stmt, 1);
-    } else {
-        sqlite3_bind_int64(stmt, 1, todo.parent_id);
-    }
-    sqlite3_bind_text(stmt,  2, todo.title.c_str(),    -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt,  3, todo.status.c_str(),   -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt,  4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 5, todo.update_time);
-    sqlite3_bind_int64(stmt, 6, todo.due_time);
-    sqlite3_bind_int64(stmt, 7, todo.id);
+  if (todo.parent_id == 0)
+  {
+    sqlite3_bind_null(stmt, 1);
+  }
+  else
+  {
+    sqlite3_bind_int64(stmt, 1, todo.parent_id);
+  }
+  sqlite3_bind_text(stmt, 2, todo.title.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, todo.status.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 5, todo.update_time);
+  sqlite3_bind_int64(stmt, 6, todo.due_time);
+  sqlite3_bind_int64(stmt, 7, todo.id);
 
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    if (rc != SQLITE_DONE) {
-        throw std::runtime_error("updateTodo failed: " + std::to_string(rc));
-    }
-    return sqlite3_changes(db_) > 0;
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE)
+  {
+    throw std::runtime_error("updateTodo failed: " + std::to_string(rc));
+  }
+  return sqlite3_changes(db_) > 0;
 }
 
 // Cascade delete: delete all descendants first, then the node itself.
 // We do a BFS/DFS in application code because SQLite FK cascade requires
 // "ON DELETE CASCADE" which we avoid to keep the schema simple.
-int Database::deleteTodo(int64_t id) {
-    // Collect all ids to delete (BFS)
-    std::vector<int64_t> to_delete;
-    std::vector<int64_t> queue = {id};
-    while (!queue.empty()) {
-        int64_t cur = queue.back(); queue.pop_back();
-        to_delete.push_back(cur);
-        auto children = getChildren(cur);
-        for (auto& c : children) queue.push_back(c.id);
-    }
+int Database::deleteTodo(int64_t id)
+{
+  // Collect all ids to delete (BFS)
+  std::vector<int64_t> to_delete;
+  std::vector<int64_t> queue = {id};
+  while (!queue.empty())
+  {
+    int64_t cur = queue.back();
+    queue.pop_back();
+    to_delete.push_back(cur);
+    auto children = getChildren(cur);
+    for (auto &c : children)
+      queue.push_back(c.id);
+  }
 
-    int count = 0;
-    // Delete leaves first (reverse order gives bottom-up within a path,
-    // but we just delete all at once since FK is already handled by ordering)
-    for (int i = (int)to_delete.size() - 1; i >= 0; --i) {
-        const char* sql = "DELETE FROM todos WHERE id=?";
-        sqlite3_stmt* stmt = nullptr;
-        check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare deleteTodo");
-        sqlite3_bind_int64(stmt, 1, to_delete[i]);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-        count += sqlite3_changes(db_);
-    }
-    return count;
+  int count = 0;
+  // Delete leaves first (reverse order gives bottom-up within a path,
+  // but we just delete all at once since FK is already handled by ordering)
+  for (int i = (int)to_delete.size() - 1; i >= 0; --i)
+  {
+    const char *sql = "DELETE FROM todos WHERE id=?";
+    sqlite3_stmt *stmt = nullptr;
+    check(
+        sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare deleteTodo"
+    );
+    sqlite3_bind_int64(stmt, 1, to_delete[i]);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    count += sqlite3_changes(db_);
+  }
+  return count;
 }
 
-// ── tree operations ───────────────────────────────────────────────────────────
+// ── tree operations
+// ───────────────────────────────────────────────────────────
 
-std::vector<TodoNode> Database::buildTree(int64_t root_parent_id) const {
-    std::vector<Todo> all = getAllTodos();
+std::vector<TodoNode> Database::buildTree(int64_t root_parent_id) const
+{
+  std::vector<Todo> all = getAllTodos();
 
-    // Build adjacency map
-    std::unordered_map<int64_t, std::vector<Todo*>> by_parent;
-    for (auto& t : all) {
-        by_parent[t.parent_id].push_back(&t);
+  // Build adjacency map
+  std::unordered_map<int64_t, std::vector<Todo *>> by_parent;
+  for (auto &t : all)
+  {
+    by_parent[t.parent_id].push_back(&t);
+  }
+
+  // Recursive lambda to build sub-trees
+  std::function<std::vector<TodoNode>(int64_t)> build =
+      [&](int64_t pid) -> std::vector<TodoNode>
+  {
+    std::vector<TodoNode> nodes;
+    auto it = by_parent.find(pid);
+    if (it == by_parent.end())
+      return nodes;
+    for (auto *tp : it->second)
+    {
+      TodoNode n;
+      n.todo = *tp;
+      n.children = build(tp->id);
+      nodes.push_back(std::move(n));
     }
+    return nodes;
+  };
 
-    // Recursive lambda to build sub-trees
-    std::function<std::vector<TodoNode>(int64_t)> build =
-        [&](int64_t pid) -> std::vector<TodoNode> {
-        std::vector<TodoNode> nodes;
-        auto it = by_parent.find(pid);
-        if (it == by_parent.end()) return nodes;
-        for (auto* tp : it->second) {
-            TodoNode n;
-            n.todo     = *tp;
-            n.children = build(tp->id);
-            nodes.push_back(std::move(n));
-        }
-        return nodes;
-    };
-
-    return build(root_parent_id);
+  return build(root_parent_id);
 }
 
-std::vector<Todo> Database::getAncestors(int64_t id) const {
-    std::vector<Todo> ancestors;
-    std::optional<Todo> cur = getTodo(id);
-    if (!cur) return ancestors;
-
-    // Walk up, collecting parent chain
-    std::vector<Todo> chain;
-    int64_t pid = cur->parent_id;
-    while (pid != 0) {
-        auto p = getTodo(pid);
-        if (!p) break;
-        chain.push_back(*p);
-        pid = p->parent_id;
-    }
-    // Reverse so result is root-down order
-    ancestors.assign(chain.rbegin(), chain.rend());
+std::vector<Todo> Database::getAncestors(int64_t id) const
+{
+  std::vector<Todo> ancestors;
+  std::optional<Todo> cur = getTodo(id);
+  if (!cur)
     return ancestors;
+
+  // Walk up, collecting parent chain
+  std::vector<Todo> chain;
+  int64_t pid = cur->parent_id;
+  while (pid != 0)
+  {
+    auto p = getTodo(pid);
+    if (!p)
+      break;
+    chain.push_back(*p);
+    pid = p->parent_id;
+  }
+  // Reverse so result is root-down order
+  ancestors.assign(chain.rbegin(), chain.rend());
+  return ancestors;
 }
