@@ -175,6 +175,13 @@ int CliApp::dispatch(const std::string& cmd, const std::string& prog,
         }
         return cmd_delete(svc_, std::stoll(args[0]));
 
+    } else if (cmd == "change-parent") {
+        if (args.size() < 2) {
+            std::cerr << "change-parent requires <id> <new_parent_id>  (use 0 for root)\n";
+            return 1;
+        }
+        return cmd_change_parent(svc_, std::stoll(args[0]), std::stoll(args[1]));
+
     } else if (cmd == "show") {
         if (args.empty()) {
             std::cerr << "show requires <id>\n";

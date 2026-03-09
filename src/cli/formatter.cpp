@@ -55,6 +55,7 @@ std::string format_usage(const std::string& prog) {
         "  " + prog + " show-tree\n"
         "  " + prog + " update <id> [--title <t>] [--status <s>] [--note <text>]\n"
         "  " + prog + " delete <id>\n"
+        "  " + prog + " change-parent <id> <new_parent_id>  (0 = make root)\n"
         "  " + prog + " show <id>\n";
 }
 

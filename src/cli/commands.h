@@ -28,6 +28,8 @@ int cmd_update(TodoService& svc, int64_t id,
 
 int cmd_delete(TodoService& svc, int64_t id);
 
+int cmd_change_parent(TodoService& svc, int64_t id, int64_t new_parent_id);
+
 int cmd_show(TodoService& svc, int64_t id);
 
 } // namespace cli

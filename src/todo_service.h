@@ -29,6 +29,9 @@ public:
 
     void deleteTodo(int64_t id);
 
+    // Move todo to a new parent (0 = make root). Detects cycles.
+    void changeParent(int64_t id, int64_t new_parent_id);
+
     std::vector<Todo>     listAll()                             const;
     std::vector<Todo>     listByStatus(const std::string& s)   const;
     std::vector<TodoNode> getTree()                            const;

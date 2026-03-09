@@ -69,6 +69,14 @@ int cmd_delete(TodoService& svc, int64_t id) {
     return 0;
 }
 
+int cmd_change_parent(TodoService& svc, int64_t id, int64_t new_parent_id) {
+    svc.changeParent(id, new_parent_id);
+    std::cout << "Moved todo #" << id << " under "
+              << (new_parent_id == 0 ? "root" : "todo #" + std::to_string(new_parent_id))
+              << "\n";
+    return 0;
+}
+
 int cmd_show(TodoService& svc, int64_t id) {
     auto t = svc.findById(id);
     if (!t) {

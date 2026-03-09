@@ -1,6 +1,7 @@
 #include "todo_service.h"
 
 #include <algorithm>
+#include <functional>
 #include <stdexcept>
 
 TodoService::TodoService(Database& db, const AppConfig& config)
@@ -80,6 +81,33 @@ void TodoService::deleteTodo(int64_t id) {
         throw std::invalid_argument("Todo not found: " + std::to_string(id));
     }
     db_.deleteTodo(id);
+}
+
+void TodoService::changeParent(int64_t id, int64_t new_parent_id) {
+    if (!db_.getTodo(id).has_value())
+        throw std::invalid_argument("Todo not found: " + std::to_string(id));
+    if (id == new_parent_id)
+        throw std::invalid_argument("A todo cannot be its own parent");
+    if (new_parent_id != 0) {
+        if (!db_.getTodo(new_parent_id).has_value())
+            throw std::invalid_argument("New parent not found: " + std::to_string(new_parent_id));
+        // Cycle check: new_parent_id must not be a descendant of id
+        auto subtree = db_.buildTree(id);
+        std::function<bool(const std::vector<TodoNode>&)> contains =
+            [&](const std::vector<TodoNode>& nodes) -> bool {
+                for (const auto& n : nodes) {
+                    if (n.todo.id == new_parent_id) return true;
+                    if (contains(n.children)) return true;
+                }
+                return false;
+            };
+        if (contains(subtree))
+            throw std::invalid_argument("Cannot move todo under its own descendant");
+    }
+    auto t = db_.getTodo(id);
+    t->parent_id   = new_parent_id;
+    t->update_time = now_timestamp();
+    db_.updateTodo(*t);
 }
 
 std::vector<Todo> TodoService::listAll() const {

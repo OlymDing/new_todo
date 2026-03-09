@@ -9,7 +9,7 @@
 
 namespace tui {
 
-enum class Modal { None, AddTodo, ConfirmDelete, EditDetail };
+enum class Modal { None, AddTodo, ConfirmDelete, EditDetail, ChangeParent };
 
 struct FlatItem {
     Todo  todo;
@@ -35,6 +35,7 @@ private:
     std::string           add_due_;
     int64_t               delete_id_      = 0;
     int64_t               add_parent_id_  = 0;
+    std::string           cp_input_;       // change-parent: new parent id input
 
     // edit buffers
     std::string  edit_title_;

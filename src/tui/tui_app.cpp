@@ -172,6 +172,28 @@ int TuiApp::run() {
     });
     auto del_comp = Container::Horizontal({ del_yes, del_no });
 
+    // ---- Change-parent modal ----
+    auto cp_input_comp = Input(&cp_input_, "New parent ID (0 = root)");
+    auto cp_ok = Button("  OK  ", [&] {
+        if (!items_.empty() && !cp_input_.empty()) {
+            try {
+                int64_t new_pid = std::stoll(cp_input_);
+                svc_.changeParent(items_[selected_].todo.id, new_pid);
+                refresh_todos();
+            } catch (...) {}
+        }
+        cp_input_.clear();
+        modal_ = Modal::None;
+        tab_focus_ = 0;
+    });
+    auto cp_cancel = Button("Cancel", [&] {
+        cp_input_.clear();
+        modal_ = Modal::None;
+        tab_focus_ = 0;
+    });
+    auto cp_buttons = Container::Horizontal({ cp_ok, cp_cancel });
+    auto cp_comp    = Container::Vertical({ cp_input_comp, cp_buttons });
+
     // ---- Edit detail components ----
     InputOption title_opt;
     title_opt.multiline = false;
@@ -193,10 +215,10 @@ int TuiApp::run() {
         edit_title_input, edit_due_input, edit_note_input, edit_btns
     });
 
-    // ---- Tab container (0=main, 1=add, 2=delete, 3=edit) ----
+    // ---- Tab container (0=main, 1=add, 2=delete, 3=edit, 4=change-parent) ----
     auto dummy = Renderer([] { return text(""); });
     auto tab_container = Container::Tab(
-        { dummy, add_comp, del_comp, edit_inputs_comp },
+        { dummy, add_comp, del_comp, edit_inputs_comp, cp_comp },
         &tab_focus_
     );
 
@@ -210,11 +232,17 @@ int TuiApp::run() {
                 return true;
             }
             if (modal_ == Modal::EditDetail) { cancel_edit(); return true; }
+            if (modal_ == Modal::ChangeParent) {
+                cp_input_.clear();
+                modal_ = Modal::None; tab_focus_ = 0;
+                return true;
+            }
             return false;
         }
 
-        // AddTodo / ConfirmDelete: pass through to modal component
-        if (modal_ == Modal::AddTodo || modal_ == Modal::ConfirmDelete)
+        // AddTodo / ConfirmDelete / ChangeParent: pass through to modal component
+        if (modal_ == Modal::AddTodo || modal_ == Modal::ConfirmDelete
+                || modal_ == Modal::ChangeParent)
             return false;
 
         // EditDetail mode: only Escape is handled above; all other keys pass through
@@ -264,6 +292,14 @@ int TuiApp::run() {
             return true;
         }
         if (ev == Event::Character('u')) { begin_edit(); return true; }
+        if (ev == Event::Character('p')) {
+            if (!items_.empty()) {
+                cp_input_.clear();
+                modal_ = Modal::ChangeParent;
+                tab_focus_ = 4;
+            }
+            return true;
+        }
         if (ev == Event::Character('q')) {
             screen.ExitLoopClosure()();
             return true;
@@ -395,7 +431,7 @@ int TuiApp::run() {
 
         auto split_view = hbox({ left_panel, right_panel });
         auto title_line = text(" new_todo") | bold;
-        auto status_bar = text(" a:add-root  c:add-child  d:del  s:cycle  u:edit  j/k:\u2191\u2193  q:quit") | dim;
+        auto status_bar = text(" a:add-root  c:add-child  d:del  s:cycle  u:edit  p:parent  j/k:\u2191\u2193  q:quit") | dim;
         auto main_view  = vbox({ title_line, split_view, status_bar });
 
         // Overlay modals
@@ -429,6 +465,24 @@ int TuiApp::run() {
                 separator(),
                 hbox({ del_yes->Render(), text("  "), del_no->Render() }),
             }) | border | size(WIDTH, EQUAL, 40) | center;
+            return dbox({ main_view, clear_under(modal_view | center) });
+        }
+
+        if (modal_ == Modal::ChangeParent && !items_.empty()) {
+            const auto& t = items_[selected_].todo;
+            std::string cur_parent = t.parent_id == 0
+                ? "root" : "#" + std::to_string(t.parent_id);
+            auto modal_view = vbox({
+                text(" Change Parent") | bold,
+                separator(),
+                text(" Todo: \"" + t.title + "\""),
+                text(" Current parent: " + cur_parent) | dim,
+                separator(),
+                hbox({ text(" New parent ID: ") | bold, cp_input_comp->Render() }),
+                text(" (enter 0 to make root)") | dim,
+                separator(),
+                hbox({ cp_ok->Render(), text("  "), cp_cancel->Render() }),
+            }) | border | size(WIDTH, EQUAL, 50) | center;
             return dbox({ main_view, clear_under(modal_view | center) });
         }
 
