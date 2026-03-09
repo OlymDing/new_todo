@@ -62,6 +62,7 @@ private:
   // panel/tab focus
   int focus_panel_ = 0;
   int tab_focus_ = 0;
+  int left_size_ = 48; // resizable split: left panel width in columns
 
   std::string next_status(const std::string &current) const;
   void refresh_todos();

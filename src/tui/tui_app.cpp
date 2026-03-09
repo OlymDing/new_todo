@@ -300,9 +300,155 @@ int TuiApp::run()
       &tab_focus_
   );
 
+  // ---- Left panel component ----
+  auto left_comp = Renderer(tab_container, [&]
+  {
+    Elements rows;
+    rows.push_back(hbox({
+        text("  ID") | bold,
+        text("  "),
+        text("Title                    ") | bold,
+        text("  "),
+        text("Status") | bold,
+    }));
+    rows.push_back(separator());
+
+    if (items_.empty())
+    {
+      rows.push_back(text("  (no todos)") | dim);
+    }
+    else
+    {
+      for (int i = 0; i < (int)items_.size(); ++i)
+      {
+        const auto &item = items_[i];
+        const auto &t    = item.todo;
+
+        std::string prefix;
+        if (item.depth == 0)
+          prefix = "  ";
+        else
+          prefix = std::string((item.depth - 1) * 2, ' ') +
+                   (item.last_child ? "\u2514\u2500 " : "\u251c\u2500 ");
+
+        std::string id_str     = std::to_string(t.id);
+        int         title_budget = 22 - (int)prefix.size();
+        if (title_budget < 5) title_budget = 5;
+        std::string title =
+            t.title.size() > (size_t)title_budget
+                ? t.title.substr(0, title_budget - 1) + "\u2026"
+                : t.title;
+
+        Element status_el = text(t.status);
+        if (t.status == "todo")
+          status_el = status_el | color(Color::Blue);
+        else if (t.status == "in_progress")
+          status_el = status_el | color(Color::Yellow);
+        else if (t.status == "done")
+          status_el = status_el | color(Color::Green);
+
+        auto row = hbox({
+            text(std::string(4 - id_str.size(), ' ') + id_str + " "),
+            text(prefix) | (item.depth > 0 ? dim : nothing),
+            text(title + std::string(title_budget - (int)title.size() + 1, ' ')),
+            status_el,
+        });
+
+        if (i == selected_)
+          row = (focus_panel_ == 0) ? row | inverted : row | inverted | dim;
+        rows.push_back(row);
+      }
+    }
+
+    return vbox({
+               text(" List") | bold,
+               separator(),
+               vbox(rows) | yframe,
+           }) |
+           border;
+  });
+
+  // ---- Right panel component ----
+  auto right_comp = Renderer(tab_container, [&]
+  {
+    if (modal_ == Modal::EditDetail && !items_.empty())
+    {
+      const auto &t       = items_[selected_].todo;
+      std::string cur_status = cfg_.statuses.empty()
+                                   ? t.status
+                                   : cfg_.statuses[edit_status_idx_];
+      Element status_el = text(cur_status);
+      if (cur_status == "todo")
+        status_el = status_el | color(Color::Blue);
+      else if (cur_status == "in_progress")
+        status_el = status_el | color(Color::Yellow);
+      else if (cur_status == "done")
+        status_el = status_el | color(Color::Green);
+
+      return vbox({
+                 text(" Edit") | bold | color(Color::Yellow),
+                 separator(),
+                 hbox({text(" Title:   ") | bold, edit_title_input->Render()}),
+                 hbox({text(" Status:  ") | bold, status_el}),
+                 hbox({text(" Due:     ") | bold, edit_due_input->Render(),
+                       text("  YYYY-MM-DD") | dim}),
+                 separator(),
+                 text(" Notes:") | bold,
+                 edit_note_input->Render() | size(HEIGHT, GREATER_THAN, 4),
+                 filler(),
+                 separator(),
+                 hbox({edit_save_btn->Render(), text("  "),
+                       edit_cancel_btn->Render()}),
+                 separator(),
+                 text("  Tab:next  Enter:save  Esc:cancel") | dim,
+             }) |
+             border | flex | color(Color::Yellow);
+    }
+    if (!items_.empty())
+    {
+      const auto &t = items_[selected_].todo;
+      Element status_el = text(t.status);
+      if (t.status == "todo")
+        status_el = status_el | color(Color::Blue);
+      else if (t.status == "in_progress")
+        status_el = status_el | color(Color::Yellow);
+      else if (t.status == "done")
+        status_el = status_el | color(Color::Green);
+
+      return vbox({
+                 text(" Detail") | bold,
+                 separator(),
+                 hbox({text(" Title:   ") | bold, text(t.title)}),
+                 hbox({text(" Status:  ") | bold, status_el}),
+                 hbox({text(" Due:     ") | bold,
+                       text(t.due_time == 0 ? "(none)" : format_date(t.due_time))}),
+                 separator(),
+                 text(" Notes:") | bold,
+                 paragraph(t.ext_info.empty() ? "(none)" : t.ext_info) | dim,
+                 filler(),
+                 separator(),
+                 hbox({text(" Created: ") | dim,
+                       text(format_timestamp(t.create_time)) | dim}),
+                 hbox({text(" Updated: ") | dim,
+                       text(format_timestamp(t.update_time)) | dim}),
+             }) |
+             border | flex;
+    }
+    return vbox({
+               text(" Detail") | bold,
+               separator(),
+               text("  (no selection)") | dim,
+               filler(),
+           }) |
+           border | flex;
+  });
+
+  // ---- Resizable split ----
+  auto split = ResizableSplitLeft(left_comp, right_comp, &left_size_);
+
   // ---- Global event handler ----
   auto main_comp = CatchEvent(
-      tab_container,
+      split,
       [&](Event ev) -> bool
       {
         // Escape: close all modals
@@ -482,180 +628,13 @@ int TuiApp::run()
       main_comp,
       [&]
       {
-        // Build list rows
-        Elements rows;
-        // Header
-        rows.push_back(hbox({
-            text("  ID") | bold,
-            text("  "),
-            text("Title                    ") | bold,
-            text("  "),
-            text("Status") | bold,
-        }));
-        rows.push_back(separator());
-
-        if (items_.empty())
-        {
-          rows.push_back(text("  (no todos)") | dim);
-        }
-        else
-        {
-          for (int i = 0; i < (int)items_.size(); ++i)
-          {
-            const auto &item = items_[i];
-            const auto &t = item.todo;
-
-            std::string prefix;
-            if (item.depth == 0)
-            {
-              prefix = "  ";
-            }
-            else
-            {
-              prefix = std::string((item.depth - 1) * 2, ' ') +
-                       (item.last_child ? "\u2514\u2500 " : "\u251c\u2500 ");
-            }
-
-            std::string id_str = std::to_string(t.id);
-            int title_budget = 22 - (int)prefix.size();
-            if (title_budget < 5)
-              title_budget = 5;
-            std::string title =
-                t.title.size() > (size_t)title_budget
-                    ? t.title.substr(0, title_budget - 1) + "\u2026"
-                    : t.title;
-
-            Element status_el = text(t.status);
-            if (t.status == "todo")
-              status_el = status_el | color(Color::Blue);
-            else if (t.status == "in_progress")
-              status_el = status_el | color(Color::Yellow);
-            else if (t.status == "done")
-              status_el = status_el | color(Color::Green);
-
-            auto row = hbox({
-                text(std::string(4 - id_str.size(), ' ') + id_str + " "),
-                text(prefix) | (item.depth > 0 ? dim : nothing),
-                text(
-                    title +
-                    std::string(title_budget - (int)title.size() + 1, ' ')
-                ),
-                status_el,
-            });
-
-            if (i == selected_)
-              row = (focus_panel_ == 0) ? row | inverted : row | inverted | dim;
-            rows.push_back(row);
-          }
-        }
-
-        auto left_panel = vbox({
-                              text(" List") | bold,
-                              separator(),
-                              vbox(rows) | yframe,
-                          }) |
-                          border | size(WIDTH, LESS_THAN, 50);
-
-        // Build right panel
-        Element right_panel;
-        if (modal_ == Modal::EditDetail && !items_.empty())
-        {
-          // Edit mode
-          const auto &t = items_[selected_].todo;
-          std::string cur_status = cfg_.statuses.empty()
-                                       ? t.status
-                                       : cfg_.statuses[edit_status_idx_];
-          Element status_el = text(cur_status);
-          if (cur_status == "todo")
-            status_el = status_el | color(Color::Blue);
-          else if (cur_status == "in_progress")
-            status_el = status_el | color(Color::Yellow);
-          else if (cur_status == "done")
-            status_el = status_el | color(Color::Green);
-
-          right_panel =
-              vbox({
-                  text(" Edit") | bold | color(Color::Yellow),
-                  separator(),
-                  hbox({text(" Title:   ") | bold, edit_title_input->Render()}),
-                  hbox({text(" Status:  ") | bold, status_el}),
-                  hbox(
-                      {text(" Due:     ") | bold, edit_due_input->Render(),
-                       text("  YYYY-MM-DD") | dim}
-                  ),
-                  separator(),
-                  text(" Notes:") | bold,
-                  edit_note_input->Render() | size(HEIGHT, GREATER_THAN, 4),
-                  filler(),
-                  separator(),
-                  hbox(
-                      {edit_save_btn->Render(), text("  "),
-                       edit_cancel_btn->Render()}
-                  ),
-                  separator(),
-                  text("  Tab:next  Enter:save  Esc:cancel") | dim,
-              }) |
-              border | flex | color(Color::Yellow);
-        }
-        else if (!items_.empty())
-        {
-          // Read-only detail
-          const auto &t = items_[selected_].todo;
-          Element status_el = text(t.status);
-          if (t.status == "todo")
-            status_el = status_el | color(Color::Blue);
-          else if (t.status == "in_progress")
-            status_el = status_el | color(Color::Yellow);
-          else if (t.status == "done")
-            status_el = status_el | color(Color::Green);
-
-          right_panel =
-              vbox({
-                  text(" Detail") | bold,
-                  separator(),
-                  hbox({text(" Title:   ") | bold, text(t.title)}),
-                  hbox({text(" Status:  ") | bold, status_el}),
-                  hbox(
-                      {text(" Due:     ") | bold,
-                       text(
-                           t.due_time == 0 ? "(none)" : format_date(t.due_time)
-                       )}
-                  ),
-                  separator(),
-                  text(" Notes:") | bold,
-                  paragraph(t.ext_info.empty() ? "(none)" : t.ext_info) | dim,
-                  filler(),
-                  separator(),
-                  hbox(
-                      {text(" Created: ") | dim,
-                       text(format_timestamp(t.create_time)) | dim}
-                  ),
-                  hbox(
-                      {text(" Updated: ") | dim,
-                       text(format_timestamp(t.update_time)) | dim}
-                  ),
-              }) |
-              border | flex;
-        }
-        else
-        {
-          right_panel = vbox({
-                            text(" Detail") | bold,
-                            separator(),
-                            text("  (no selection)") | dim,
-                            filler(),
-                        }) |
-                        border | flex;
-        }
-
-        auto split_view = hbox({left_panel, right_panel});
         auto title_line = text(" new_todo") | bold;
         auto status_bar = text(
                               " a:add-root  c:add-child  d:del  s:cycle  "
                               "u:edit  p:parent  /:search  j/k:\u2191\u2193  q:quit"
                           ) |
                           dim;
-        auto main_view = vbox({title_line, split_view, status_bar});
+        auto main_view = vbox({title_line, main_comp->Render() | flex, status_bar});
 
         // Overlay modals
         if (modal_ == Modal::AddTodo)
