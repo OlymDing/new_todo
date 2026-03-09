@@ -280,7 +280,26 @@ int TuiApp::run()
       {edit_title_input, edit_due_input, edit_note_input, edit_btns}
   );
 
-  // ---- Tab container (0=main, 1=add, 2=delete, 3=edit, 4=change-parent, 5=search) ----
+  // ---- Logout confirmation modal ----
+  auto logout_yes = Button(
+      "  Yes  ",
+      [&]
+      {
+        session_.clear();
+        screen.ExitLoopClosure()();
+      }
+  );
+  auto logout_no = Button(
+      "  No   ",
+      [&]
+      {
+        modal_ = Modal::None;
+        tab_focus_ = 0;
+      }
+  );
+  auto logout_comp = Container::Horizontal({logout_yes, logout_no});
+
+  // ---- Tab container (0=main, 1=add, 2=delete, 3=edit, 4=change-parent, 5=search, 6=logout) ----
   // Search input component — onChange triggers a live FTS query.
   InputOption search_opt;
   search_opt.multiline = false;
@@ -296,7 +315,8 @@ int TuiApp::run()
 
   auto dummy = Renderer([] { return text(""); });
   auto tab_container = Container::Tab(
-      {dummy, add_comp, del_comp, edit_inputs_comp, cp_comp, search_comp},
+      {dummy, add_comp, del_comp, edit_inputs_comp, cp_comp, search_comp,
+       logout_comp},
       &tab_focus_
   );
 
@@ -483,7 +503,16 @@ int TuiApp::run()
             tab_focus_ = 0;
             return true;
           }
-          return false;
+          if (modal_ == Modal::ConfirmLogout)
+          {
+            modal_ = Modal::None;
+            tab_focus_ = 0;
+            return true;
+          }
+          // No modal open: Esc shows logout confirmation.
+          modal_ = Modal::ConfirmLogout;
+          tab_focus_ = 6;
+          return true;
         }
 
         // Search modal: handle navigation and confirm inside the modal.
@@ -631,7 +660,7 @@ int TuiApp::run()
         auto title_line = text(" new_todo") | bold;
         auto status_bar = text(
                               " a:add-root  c:add-child  d:del  s:cycle  "
-                              "u:edit  p:parent  /:search  j/k:\u2191\u2193  q:quit"
+                              "u:edit  p:parent  /:search  j/k:\u2191\u2193  q:quit  Esc:logout"
                           ) |
                           dim;
         auto main_view = vbox({title_line, main_comp->Render() | flex, status_bar});
@@ -750,6 +779,20 @@ int TuiApp::run()
                   ) | dim,
               }) |
               border | size(WIDTH, EQUAL, 55) | center;
+          return dbox({main_view, clear_under(modal_view | center)});
+        }
+
+        if (modal_ == Modal::ConfirmLogout)
+        {
+          auto modal_view =
+              vbox({
+                  text(" Logout") | bold,
+                  separator(),
+                  text(" Are you sure you want to log out?"),
+                  separator(),
+                  hbox({logout_yes->Render(), text("  "), logout_no->Render()}),
+              }) |
+              border | size(WIDTH, EQUAL, 42) | center;
           return dbox({main_view, clear_under(modal_view | center)});
         }
 

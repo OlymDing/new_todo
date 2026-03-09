@@ -1,6 +1,7 @@
 #pragma once
 #include "config.h"
 #include "db.h"
+#include "session.h"
 #include "todo_service.h"
 #include "todo.h"
 #include <string>
@@ -17,7 +18,8 @@ enum class Modal
   ConfirmDelete,
   EditDetail,
   ChangeParent,
-  Search
+  Search,
+  ConfirmLogout
 };
 
 struct FlatItem
@@ -63,6 +65,8 @@ private:
   int focus_panel_ = 0;
   int tab_focus_ = 0;
   int left_size_ = 48; // resizable split: left panel width in columns
+
+  SessionManager session_;
 
   std::string next_status(const std::string &current) const;
   void refresh_todos();
