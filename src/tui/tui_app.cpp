@@ -415,7 +415,7 @@ int TuiApp::run() {
                 separator(),
                 hbox({ add_ok->Render(), text("  "), add_cancel->Render() }),
             }) | border | size(WIDTH, EQUAL, 50) | center;
-            return dbox({ main_view, modal_view | center });
+            return dbox({ main_view, clear_under(modal_view | center) });
         }
 
         if (modal_ == Modal::ConfirmDelete) {
@@ -429,7 +429,7 @@ int TuiApp::run() {
                 separator(),
                 hbox({ del_yes->Render(), text("  "), del_no->Render() }),
             }) | border | size(WIDTH, EQUAL, 40) | center;
-            return dbox({ main_view, modal_view | center });
+            return dbox({ main_view, clear_under(modal_view | center) });
         }
 
         return main_view;
