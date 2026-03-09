@@ -11,7 +11,8 @@
 class TodoService
 {
 public:
-  TodoService(Database &db, const AppConfig &config);
+  // user_id = 0 → legacy/anonymous mode (no per-user filtering)
+  TodoService(Database &db, const AppConfig &config, int64_t user_id = 0);
 
   int64_t addTodo(
       const std::string &title, const std::string &status = "",
@@ -43,6 +44,7 @@ public:
 private:
   Database &db_;
   const AppConfig &config_;
+  int64_t user_id_; // 0 = anonymous / no filtering
 
   std::string resolveStatus(const std::string &s) const;
 };

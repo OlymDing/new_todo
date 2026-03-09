@@ -77,6 +77,8 @@ std::string format_usage(const std::string &prog)
          "  " +
          prog + " search <query>\n"
          "  " +
+         prog + " logout\n"
+         "  " +
          prog + " show <id>\n";
 }
 

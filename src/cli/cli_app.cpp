@@ -3,6 +3,7 @@
 #include "cli/formatter.h"
 #include "tui/tui_app.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <unistd.h>
@@ -17,13 +18,21 @@ namespace cli
 {
 
 CliApp::CliApp(Database &db, const AppConfig &cfg)
-    : db_(db), cfg_(cfg), svc_(db_, cfg_)
+    : db_(db), cfg_(cfg), auth_(db_)
 {
 }
 
 int CliApp::run(int argc, char **argv)
 {
   std::string prog = argv[0];
+
+  int64_t user_id = authenticate();
+  if (user_id == 0)
+  {
+    std::cerr << "Authentication failed.\n";
+    return 1;
+  }
+  svc_.emplace(db_, cfg_, user_id);
 
   if (argc >= 2)
   {
@@ -46,10 +55,11 @@ int CliApp::run(int argc, char **argv)
   }
   else if (isatty(STDIN_FILENO))
   {
+    std::cout << "\033[2J\033[H" << std::flush;
     int choice = show_selector();
     if (choice == 0)
     {
-      tui::TuiApp tui_app(db_, cfg_);
+      tui::TuiApp tui_app(db_, cfg_, user_id);
       return tui_app.run();
     }
     else
@@ -62,6 +72,165 @@ int CliApp::run(int argc, char **argv)
     std::cerr << format_usage(prog);
     return 1;
   }
+}
+
+int64_t CliApp::authenticate()
+{
+  // 1. Reuse an active session for this terminal.
+  if (auto s = session_.load())
+    return s->user_id;
+
+  // 2. Non-interactive path: honour TODO_USER / TODO_PASS environment variables.
+  const char *env_user = std::getenv("TODO_USER");
+  const char *env_pass = std::getenv("TODO_PASS");
+  if (env_user && env_pass)
+  {
+    auto u = auth_.login(env_user, env_pass);
+    if (u)
+    {
+      session_.save(u->id, u->username);
+      return u->id;
+    }
+    std::cerr << "Authentication failed for user '" << env_user << "'.\n";
+    return 0;
+  }
+
+  // 3. Interactive path: show FTXUI login screen.
+  return show_login_screen();
+}
+
+int64_t CliApp::show_login_screen()
+{
+  // Tabs: 0 = Login, 1 = Register
+  int tab = 0;
+  std::string username, password, confirm_pass, message;
+  int64_t result_id = 0;
+  bool done = false;
+
+  auto screen = ScreenInteractive::TerminalOutput();
+
+  // Login form components
+  InputOption pw_opt;
+  pw_opt.password = true;
+  auto login_user_input = Input(&username, "Username");
+  auto login_pass_input = Input(&password, "Password", pw_opt);
+  auto login_ok = Button("  Login  ", [&]
+  {
+    try
+    {
+      auto u = auth_.login(username, password);
+      if (u)
+      {
+        session_.save(u->id, u->username);
+        result_id = u->id;
+        done = true;
+        screen.ExitLoopClosure()();
+      }
+      else
+      {
+        message = "Invalid username or password.";
+      }
+    }
+    catch (const std::exception &e)
+    {
+      message = e.what();
+    }
+  });
+
+  // Register form components
+  std::string reg_user, reg_pass, reg_confirm;
+  auto reg_user_input    = Input(&reg_user, "Username");
+  InputOption reg_pw_opt;
+  reg_pw_opt.password = true;
+  auto reg_pass_input    = Input(&reg_pass, "Password", reg_pw_opt);
+  auto reg_confirm_input = Input(&reg_confirm, "Confirm password", reg_pw_opt);
+  auto reg_ok = Button("  Register  ", [&]
+  {
+    try
+    {
+      if (reg_pass != reg_confirm)
+      {
+        message = "Passwords do not match.";
+        return;
+      }
+      int64_t id = auth_.registerUser(reg_user, reg_pass);
+      session_.save(id, reg_user);
+      result_id = id;
+      done = true;
+      screen.ExitLoopClosure()();
+    }
+    catch (const std::exception &e)
+    {
+      message = e.what();
+    }
+  });
+
+  auto login_comp = Container::Vertical(
+      {login_user_input, login_pass_input, login_ok}
+  );
+  auto reg_comp = Container::Vertical(
+      {reg_user_input, reg_pass_input, reg_confirm_input, reg_ok}
+  );
+  auto tab_comp = Container::Tab({login_comp, reg_comp}, &tab);
+
+  auto toggle_login    = Button(" Login ",    [&] { tab = 0; message.clear(); });
+  auto toggle_register = Button(" Register ", [&] { tab = 1; message.clear(); });
+  auto tab_toggle      = Container::Horizontal({toggle_login, toggle_register});
+
+  auto root = Container::Vertical({tab_toggle, tab_comp});
+
+  auto evented = CatchEvent(root, [&](Event ev) -> bool
+  {
+    if (ev == Event::Escape)
+    {
+      screen.ExitLoopClosure()();
+      return true;
+    }
+    return false;
+  });
+
+  auto renderer = Renderer(evented, [&]
+  {
+    Element form;
+    if (tab == 0)
+    {
+      form = vbox({
+          hbox({text(" User: ") | bold, login_user_input->Render()}),
+          hbox({text(" Pass: ") | bold, login_pass_input->Render()}),
+          separator(),
+          login_ok->Render(),
+      });
+    }
+    else
+    {
+      form = vbox({
+          hbox({text(" User:     ") | bold, reg_user_input->Render()}),
+          hbox({text(" Pass:     ") | bold, reg_pass_input->Render()}),
+          hbox({text(" Confirm:  ") | bold, reg_confirm_input->Render()}),
+          separator(),
+          reg_ok->Render(),
+      });
+    }
+
+    return vbox({
+               text("  new_todo") | bold,
+               separator(),
+               hbox({toggle_login->Render(), text("  "),
+                     toggle_register->Render()}),
+               separator(),
+               form,
+               separator(),
+               text(message.empty() ? "" : " " + message) |
+                   color(Color::Red),
+               separator(),
+               text("  Esc: quit") | dim,
+           }) |
+           border | size(WIDTH, EQUAL, 45) | center;
+  });
+
+  screen.Loop(renderer);
+  std::cout << "\033[2J\033[H" << std::flush;
+  return result_id;
 }
 
 std::optional<std::string> CliApp::parse_flag(
@@ -190,7 +359,7 @@ int CliApp::dispatch(
       return 1;
     }
     return cmd_add(
-        svc_, args[0], parse_flag(args, "--status"), parse_flag(args, "--note")
+        *svc_, args[0], parse_flag(args, "--status"), parse_flag(args, "--note")
     );
   }
   else if (cmd == "add-child")
@@ -201,17 +370,17 @@ int CliApp::dispatch(
       return 1;
     }
     return cmd_add_child(
-        svc_, std::stoll(args[0]), args[1], parse_flag(args, "--status"),
+        *svc_, std::stoll(args[0]), args[1], parse_flag(args, "--status"),
         parse_flag(args, "--note")
     );
   }
   else if (cmd == "list")
   {
-    return cmd_list(svc_, parse_flag(args, "--status"));
+    return cmd_list(*svc_, parse_flag(args, "--status"));
   }
   else if (cmd == "show-tree")
   {
-    return cmd_show_tree(svc_);
+    return cmd_show_tree(*svc_);
   }
   else if (cmd == "update")
   {
@@ -221,7 +390,7 @@ int CliApp::dispatch(
       return 1;
     }
     return cmd_update(
-        svc_, std::stoll(args[0]), parse_flag(args, "--title"),
+        *svc_, std::stoll(args[0]), parse_flag(args, "--title"),
         parse_flag(args, "--status"), parse_flag(args, "--note")
     );
   }
@@ -232,7 +401,7 @@ int CliApp::dispatch(
       std::cerr << "delete requires <id>\n";
       return 1;
     }
-    return cmd_delete(svc_, std::stoll(args[0]));
+    return cmd_delete(*svc_, std::stoll(args[0]));
   }
   else if (cmd == "change-parent")
   {
@@ -242,7 +411,7 @@ int CliApp::dispatch(
           << "change-parent requires <id> <new_parent_id>  (use 0 for root)\n";
       return 1;
     }
-    return cmd_change_parent(svc_, std::stoll(args[0]), std::stoll(args[1]));
+    return cmd_change_parent(*svc_, std::stoll(args[0]), std::stoll(args[1]));
   }
   else if (cmd == "search")
   {
@@ -251,7 +420,13 @@ int CliApp::dispatch(
       std::cerr << "search requires <query>\n";
       return 1;
     }
-    return cmd_search(svc_, args[0]);
+    return cmd_search(*svc_, args[0]);
+  }
+  else if (cmd == "logout")
+  {
+    session_.clear();
+    std::cout << "Logged out.\n";
+    return 0;
   }
   else if (cmd == "show")
   {
@@ -260,7 +435,7 @@ int CliApp::dispatch(
       std::cerr << "show requires <id>\n";
       return 1;
     }
-    return cmd_show(svc_, std::stoll(args[0]));
+    return cmd_show(*svc_, std::stoll(args[0]));
   }
   else
   {

@@ -10,6 +10,7 @@ struct Todo
 {
   int64_t id = 0;
   int64_t parent_id = 0; // 0 = child of virtual root
+  int64_t user_id = 0;   // 0 = unowned (legacy / anonymous)
   std::string title;
   std::string status;
   std::string ext_info;

@@ -9,8 +9,8 @@ using namespace ftxui;
 namespace tui
 {
 
-TuiApp::TuiApp(Database &db, const AppConfig &cfg)
-    : db_(db), cfg_(cfg), svc_(db_, cfg_)
+TuiApp::TuiApp(Database &db, const AppConfig &cfg, int64_t user_id)
+    : db_(db), cfg_(cfg), svc_(db_, cfg_, user_id)
 {
 }
 

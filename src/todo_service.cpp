@@ -4,8 +4,8 @@
 #include <functional>
 #include <stdexcept>
 
-TodoService::TodoService(Database &db, const AppConfig &config)
-    : db_(db), config_(config)
+TodoService::TodoService(Database &db, const AppConfig &config, int64_t user_id)
+    : db_(db), config_(config), user_id_(user_id)
 {
 }
 
@@ -28,10 +28,11 @@ int64_t TodoService::addTodo(
   if (title.empty())
     throw std::invalid_argument("Title must not be empty");
   Todo t;
-  t.title = title;
-  t.status = resolveStatus(status);
-  t.ext_info = ext_info;
-  t.parent_id = 0;
+  t.title       = title;
+  t.status      = resolveStatus(status);
+  t.ext_info    = ext_info;
+  t.parent_id   = 0;
+  t.user_id     = user_id_;
   t.create_time = now_timestamp();
   t.update_time = t.create_time;
   return db_.insertTodo(t);
@@ -51,10 +52,11 @@ int64_t TodoService::addChild(
     );
   }
   Todo t;
-  t.title = title;
-  t.status = resolveStatus(status);
-  t.ext_info = ext_info;
-  t.parent_id = parent_id;
+  t.title       = title;
+  t.status      = resolveStatus(status);
+  t.ext_info    = ext_info;
+  t.parent_id   = parent_id;
+  t.user_id     = user_id_;
   t.create_time = now_timestamp();
   t.update_time = t.create_time;
   return db_.insertTodo(t);
@@ -142,7 +144,7 @@ void TodoService::changeParent(int64_t id, int64_t new_parent_id)
   db_.updateTodo(*t);
 }
 
-std::vector<Todo> TodoService::listAll() const { return db_.getAllTodos(); }
+std::vector<Todo> TodoService::listAll() const { return db_.getAllTodos(user_id_); }
 
 std::vector<Todo> TodoService::listByStatus(const std::string &s) const
 {
@@ -150,7 +152,7 @@ std::vector<Todo> TodoService::listByStatus(const std::string &s) const
   {
     throw std::invalid_argument("Invalid status: '" + s + "'");
   }
-  auto all = db_.getAllTodos();
+  auto all = db_.getAllTodos(user_id_);
   std::vector<Todo> result;
   for (auto &t : all)
   {
@@ -160,7 +162,10 @@ std::vector<Todo> TodoService::listByStatus(const std::string &s) const
   return result;
 }
 
-std::vector<TodoNode> TodoService::getTree() const { return db_.buildTree(0); }
+std::vector<TodoNode> TodoService::getTree() const
+{
+  return db_.buildTree(0, user_id_);
+}
 
 std::optional<Todo> TodoService::findById(int64_t id) const
 {
@@ -171,5 +176,5 @@ std::vector<Todo> TodoService::search(const std::string &query) const
 {
   if (query.empty())
     return {};
-  return db_.searchTodos(query);
+  return db_.searchTodos(query, user_id_);
 }

@@ -30,7 +30,7 @@ struct FlatItem
 class TuiApp
 {
 public:
-  TuiApp(Database &db, const AppConfig &cfg);
+  TuiApp(Database &db, const AppConfig &cfg, int64_t user_id = 0);
   int run();
 
 private:

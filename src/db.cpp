@@ -103,6 +103,11 @@ void Database::initSchema()
       db_, "ALTER TABLE todos ADD COLUMN due_time INTEGER NOT NULL DEFAULT 0;",
       nullptr, nullptr, nullptr
   );
+  // Migrate: add user_id column for multi-user support (0 = anonymous/legacy).
+  sqlite3_exec(
+      db_, "ALTER TABLE todos ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;",
+      nullptr, nullptr, nullptr
+  );
   // Rebuild the FTS index so that rows inserted before the triggers existed
   // (e.g. in an older database file) are also indexed.
   sqlite3_exec(
@@ -121,24 +126,21 @@ Todo Database::rowToTodo(sqlite3_stmt *stmt) const
   t.id = sqlite3_column_int64(stmt, 0);
   // parent_id is NULL for root-level nodes; map NULL → 0
   if (sqlite3_column_type(stmt, 1) == SQLITE_NULL)
-  {
     t.parent_id = 0;
-  }
   else
-  {
     t.parent_id = sqlite3_column_int64(stmt, 1);
-  }
+  t.user_id = sqlite3_column_int64(stmt, 2);
   auto text = [&](int col) -> std::string
   {
     const unsigned char *p = sqlite3_column_text(stmt, col);
     return p ? reinterpret_cast<const char *>(p) : "";
   };
-  t.title = text(2);
-  t.status = text(3);
-  t.ext_info = text(4);
-  t.create_time = sqlite3_column_int64(stmt, 5);
-  t.update_time = sqlite3_column_int64(stmt, 6);
-  t.due_time = sqlite3_column_int64(stmt, 7);
+  t.title       = text(3);
+  t.status      = text(4);
+  t.ext_info    = text(5);
+  t.create_time = sqlite3_column_int64(stmt, 6);
+  t.update_time = sqlite3_column_int64(stmt, 7);
+  t.due_time    = sqlite3_column_int64(stmt, 8);
   return t;
 }
 
@@ -147,135 +149,121 @@ Todo Database::rowToTodo(sqlite3_stmt *stmt) const
 
 int64_t Database::insertTodo(const Todo &todo)
 {
-  const char *sql = "INSERT INTO todos (parent_id, title, status, ext_info, "
-                    "create_time, update_time, due_time) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)";
+  const char *sql =
+      "INSERT INTO todos (parent_id, user_id, title, status, ext_info, "
+      "create_time, update_time, due_time) "
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
   sqlite3_stmt *stmt = nullptr;
   check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare insert");
 
-  // parent_id: 0 → NULL
   if (todo.parent_id == 0)
-  {
     sqlite3_bind_null(stmt, 1);
-  }
   else
-  {
     sqlite3_bind_int64(stmt, 1, todo.parent_id);
-  }
-  sqlite3_bind_text(stmt, 2, todo.title.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 3, todo.status.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_int64(stmt, 5, todo.create_time);
-  sqlite3_bind_int64(stmt, 6, todo.update_time);
-  sqlite3_bind_int64(stmt, 7, todo.due_time);
+  sqlite3_bind_int64(stmt, 2, todo.user_id);
+  sqlite3_bind_text(stmt, 3, todo.title.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 4, todo.status.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 5, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 6, todo.create_time);
+  sqlite3_bind_int64(stmt, 7, todo.update_time);
+  sqlite3_bind_int64(stmt, 8, todo.due_time);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   if (rc != SQLITE_DONE)
-  {
     throw std::runtime_error("insertTodo failed: " + std::to_string(rc));
-  }
   return sqlite3_last_insert_rowid(db_);
 }
 
 std::optional<Todo> Database::getTodo(int64_t id) const
 {
   const char *sql =
-      "SELECT "
-      "id,parent_id,title,status,ext_info,create_time,update_time,due_time "
-      "FROM todos WHERE id=?";
+      "SELECT id,parent_id,user_id,title,status,ext_info,"
+      "create_time,update_time,due_time FROM todos WHERE id=?";
   sqlite3_stmt *stmt = nullptr;
   check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getTodo");
   sqlite3_bind_int64(stmt, 1, id);
   std::optional<Todo> result;
   if (sqlite3_step(stmt) == SQLITE_ROW)
-  {
     result = rowToTodo(stmt);
-  }
   sqlite3_finalize(stmt);
   return result;
 }
 
-std::vector<Todo> Database::getChildren(int64_t parent_id) const
+std::vector<Todo> Database::getChildren(int64_t parent_id,
+                                        int64_t user_id) const
 {
   std::string sql =
-      "SELECT "
-      "id,parent_id,title,status,ext_info,create_time,update_time,due_time "
-      "FROM todos WHERE ";
+      "SELECT id,parent_id,user_id,title,status,ext_info,"
+      "create_time,update_time,due_time FROM todos WHERE ";
   sqlite3_stmt *stmt = nullptr;
-  if (parent_id == 0)
-  {
-    sql += "parent_id IS NULL";
-    check(
-        sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr),
-        "prepare getChildren"
-    );
-  }
-  else
-  {
-    sql += "parent_id=?";
-    check(
-        sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr),
-        "prepare getChildren"
-    );
-    sqlite3_bind_int64(stmt, 1, parent_id);
-  }
+  std::string pid_clause =
+      (parent_id == 0) ? "parent_id IS NULL" : "parent_id=?";
+  std::string uid_clause = (user_id != 0) ? " AND user_id=?" : "";
+  sql += pid_clause + uid_clause;
+
+  check(
+      sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr),
+      "prepare getChildren"
+  );
+  int bind = 1;
+  if (parent_id != 0)
+    sqlite3_bind_int64(stmt, bind++, parent_id);
+  if (user_id != 0)
+    sqlite3_bind_int64(stmt, bind++, user_id);
+
   std::vector<Todo> result;
   while (sqlite3_step(stmt) == SQLITE_ROW)
-  {
     result.push_back(rowToTodo(stmt));
-  }
   sqlite3_finalize(stmt);
   return result;
 }
 
-std::vector<Todo> Database::getAllTodos() const
+std::vector<Todo> Database::getAllTodos(int64_t user_id) const
 {
-  const char *sql = "SELECT "
-                    "id,parent_id,title,status,ext_info,create_time,update_"
-                    "time,due_time FROM todos";
+  std::string sql =
+      "SELECT id,parent_id,user_id,title,status,ext_info,"
+      "create_time,update_time,due_time FROM todos";
+  if (user_id != 0)
+    sql += " WHERE user_id=?";
   sqlite3_stmt *stmt = nullptr;
   check(
-      sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare getAllTodos"
+      sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr),
+      "prepare getAllTodos"
   );
+  if (user_id != 0)
+    sqlite3_bind_int64(stmt, 1, user_id);
   std::vector<Todo> result;
   while (sqlite3_step(stmt) == SQLITE_ROW)
-  {
     result.push_back(rowToTodo(stmt));
-  }
   sqlite3_finalize(stmt);
   return result;
 }
 
 bool Database::updateTodo(const Todo &todo)
 {
-  const char *sql = "UPDATE todos SET parent_id=?, title=?, status=?, "
-                    "ext_info=?, update_time=?, due_time=? "
+  const char *sql = "UPDATE todos SET parent_id=?, user_id=?, title=?, "
+                    "status=?, ext_info=?, update_time=?, due_time=? "
                     "WHERE id=?";
   sqlite3_stmt *stmt = nullptr;
   check(sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare updateTodo");
 
   if (todo.parent_id == 0)
-  {
     sqlite3_bind_null(stmt, 1);
-  }
   else
-  {
     sqlite3_bind_int64(stmt, 1, todo.parent_id);
-  }
-  sqlite3_bind_text(stmt, 2, todo.title.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 3, todo.status.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 4, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_int64(stmt, 5, todo.update_time);
-  sqlite3_bind_int64(stmt, 6, todo.due_time);
-  sqlite3_bind_int64(stmt, 7, todo.id);
+  sqlite3_bind_int64(stmt, 2, todo.user_id);
+  sqlite3_bind_text(stmt, 3, todo.title.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 4, todo.status.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 5, todo.ext_info.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 6, todo.update_time);
+  sqlite3_bind_int64(stmt, 7, todo.due_time);
+  sqlite3_bind_int64(stmt, 8, todo.id);
 
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   if (rc != SQLITE_DONE)
-  {
     throw std::runtime_error("updateTodo failed: " + std::to_string(rc));
-  }
   return sqlite3_changes(db_) > 0;
 }
 
@@ -318,9 +306,10 @@ int Database::deleteTodo(int64_t id)
 // ── tree operations
 // ───────────────────────────────────────────────────────────
 
-std::vector<TodoNode> Database::buildTree(int64_t root_parent_id) const
+std::vector<TodoNode> Database::buildTree(int64_t root_parent_id,
+                                          int64_t user_id) const
 {
-  std::vector<Todo> all = getAllTodos();
+  std::vector<Todo> all = getAllTodos(user_id);
 
   // Build adjacency map
   std::unordered_map<int64_t, std::vector<Todo *>> by_parent;
@@ -373,21 +362,28 @@ std::vector<Todo> Database::getAncestors(int64_t id) const
   return ancestors;
 }
 
-std::vector<Todo> Database::searchTodos(const std::string &query) const
+std::vector<Todo> Database::searchTodos(const std::string &query,
+                                        int64_t user_id) const
 {
-  // Join FTS results back to the todos table to get full rows.
-  const char *sql =
-      "SELECT t.id, t.parent_id, t.title, t.status, t.ext_info, "
+  std::string sql =
+      "SELECT t.id, t.parent_id, t.user_id, t.title, t.status, t.ext_info, "
       "       t.create_time, t.update_time, t.due_time "
       "FROM todos t "
       "JOIN todos_fts f ON f.rowid = t.id "
-      "WHERE todos_fts MATCH ? "
-      "ORDER BY rank";
+      "WHERE todos_fts MATCH ?";
+  if (user_id != 0)
+    sql += " AND t.user_id=?";
+  sql += " ORDER BY rank";
+
   sqlite3_stmt *stmt = nullptr;
   check(
-      sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare searchTodos"
+      sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr),
+      "prepare searchTodos"
   );
   sqlite3_bind_text(stmt, 1, query.c_str(), -1, SQLITE_TRANSIENT);
+  if (user_id != 0)
+    sqlite3_bind_int64(stmt, 2, user_id);
+
   std::vector<Todo> result;
   while (sqlite3_step(stmt) == SQLITE_ROW)
     result.push_back(rowToTodo(stmt));
