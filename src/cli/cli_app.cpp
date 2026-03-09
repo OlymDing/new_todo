@@ -221,6 +221,9 @@ int CliApp::show_selector() {
     });
     screen.Loop(renderer);
 
+    // Clear the selector UI from the terminal
+    std::cout << "\033[2J\033[H" << std::flush;
+
     if (!confirmed) return 1;  // Esc -> fall back to CLI
     return selected;            // 0=TUI, 1=CLI
 }
