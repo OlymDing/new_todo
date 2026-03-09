@@ -56,6 +56,37 @@ void Database::initSchema()
             due_time    INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_todos_parent_id ON todos(parent_id);
+
+        -- FTS5 virtual table: content= keeps the index in sync with todos.
+        -- The indexed document is "title\next_info" so both fields are
+        -- searchable in a single query.
+        CREATE VIRTUAL TABLE IF NOT EXISTS todos_fts USING fts5(
+            content,
+            content='todos',
+            content_rowid='id',
+            tokenize='unicode61'
+        );
+
+        -- Keep the FTS index in sync with the todos table.
+        CREATE TRIGGER IF NOT EXISTS todos_fts_insert
+            AFTER INSERT ON todos BEGIN
+                INSERT INTO todos_fts(rowid, content)
+                VALUES (new.id, new.title || char(10) || new.ext_info);
+            END;
+
+        CREATE TRIGGER IF NOT EXISTS todos_fts_update
+            AFTER UPDATE ON todos BEGIN
+                INSERT INTO todos_fts(todos_fts, rowid, content)
+                VALUES ('delete', old.id, old.title || char(10) || old.ext_info);
+                INSERT INTO todos_fts(rowid, content)
+                VALUES (new.id, new.title || char(10) || new.ext_info);
+            END;
+
+        CREATE TRIGGER IF NOT EXISTS todos_fts_delete
+            AFTER DELETE ON todos BEGIN
+                INSERT INTO todos_fts(todos_fts, rowid, content)
+                VALUES ('delete', old.id, old.title || char(10) || old.ext_info);
+            END;
     )sql";
   char *errmsg = nullptr;
   int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &errmsg);
@@ -70,6 +101,13 @@ void Database::initSchema()
   // EXISTS before version 3.37).
   sqlite3_exec(
       db_, "ALTER TABLE todos ADD COLUMN due_time INTEGER NOT NULL DEFAULT 0;",
+      nullptr, nullptr, nullptr
+  );
+  // Rebuild the FTS index so that rows inserted before the triggers existed
+  // (e.g. in an older database file) are also indexed.
+  sqlite3_exec(
+      db_,
+      "INSERT INTO todos_fts(todos_fts) VALUES ('rebuild');",
       nullptr, nullptr, nullptr
   );
 }
@@ -333,4 +371,26 @@ std::vector<Todo> Database::getAncestors(int64_t id) const
   // Reverse so result is root-down order
   ancestors.assign(chain.rbegin(), chain.rend());
   return ancestors;
+}
+
+std::vector<Todo> Database::searchTodos(const std::string &query) const
+{
+  // Join FTS results back to the todos table to get full rows.
+  const char *sql =
+      "SELECT t.id, t.parent_id, t.title, t.status, t.ext_info, "
+      "       t.create_time, t.update_time, t.due_time "
+      "FROM todos t "
+      "JOIN todos_fts f ON f.rowid = t.id "
+      "WHERE todos_fts MATCH ? "
+      "ORDER BY rank";
+  sqlite3_stmt *stmt = nullptr;
+  check(
+      sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr), "prepare searchTodos"
+  );
+  sqlite3_bind_text(stmt, 1, query.c_str(), -1, SQLITE_TRANSIENT);
+  std::vector<Todo> result;
+  while (sqlite3_step(stmt) == SQLITE_ROW)
+    result.push_back(rowToTodo(stmt));
+  sqlite3_finalize(stmt);
+  return result;
 }

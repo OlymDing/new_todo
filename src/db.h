@@ -33,6 +33,9 @@ public:
   // Return ancestors from root down to (but not including) id
   std::vector<Todo> getAncestors(int64_t id) const;
 
+  // Full-text search across title and ext_info
+  std::vector<Todo> searchTodos(const std::string &query) const;
+
 private:
   sqlite3 *db_ = nullptr;
 

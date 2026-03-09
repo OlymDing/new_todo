@@ -162,3 +162,87 @@ TEST_F(DbTest, GetAncestorsForRoot)
   auto ancestors = db.getAncestors(id);
   EXPECT_TRUE(ancestors.empty());
 }
+
+// ── FTS search tests
+// ──────────────────────────────────────────────────────────
+
+TEST_F(DbTest, SearchByTitle)
+{
+  Todo t = make("Buy groceries");
+  db.insertTodo(t);
+  db.insertTodo(make("Write report"));
+
+  auto results = db.searchTodos("groceries");
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].title, "Buy groceries");
+}
+
+TEST_F(DbTest, SearchByNote)
+{
+  Todo t = make("Project alpha");
+  t.ext_info = "remember to call Alice";
+  db.insertTodo(t);
+  db.insertTodo(make("Unrelated task"));
+
+  auto results = db.searchTodos("Alice");
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].title, "Project alpha");
+}
+
+TEST_F(DbTest, SearchMatchesBothTitleAndNote)
+{
+  Todo t1 = make("Deploy service");
+  t1.ext_info = "check database first";
+  db.insertTodo(t1);
+
+  Todo t2 = make("database backup");
+  db.insertTodo(t2);
+
+  auto results = db.searchTodos("database");
+  EXPECT_EQ(results.size(), 2u);
+}
+
+TEST_F(DbTest, SearchNoMatch)
+{
+  db.insertTodo(make("Buy milk"));
+  auto results = db.searchTodos("xyzzy");
+  EXPECT_TRUE(results.empty());
+}
+
+TEST_F(DbTest, SearchReflectsUpdate)
+{
+  Todo t = make("Old title");
+  int64_t id = db.insertTodo(t);
+
+  auto row = db.getTodo(id);
+  ASSERT_TRUE(row.has_value());
+  row->title = "New title";
+  row->update_time = 2000;
+  db.updateTodo(*row);
+
+  EXPECT_TRUE(db.searchTodos("Old").empty());
+
+  auto results = db.searchTodos("New");
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].title, "New title");
+}
+
+TEST_F(DbTest, SearchReflectsDelete)
+{
+  int64_t id = db.insertTodo(make("Temporary task"));
+  ASSERT_EQ(db.searchTodos("Temporary").size(), 1u);
+
+  db.deleteTodo(id);
+  EXPECT_TRUE(db.searchTodos("Temporary").empty());
+}
+
+TEST_F(DbTest, SearchPrefixQuery)
+{
+  db.insertTodo(make("Implement feature"));
+  db.insertTodo(make("Implementation details"));
+  db.insertTodo(make("Unrelated"));
+
+  // FTS5 prefix search with trailing '*'
+  auto results = db.searchTodos("Implement*");
+  EXPECT_EQ(results.size(), 2u);
+}
