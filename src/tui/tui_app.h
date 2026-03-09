@@ -68,7 +68,6 @@ private:
 
   SessionManager session_;
 
-  std::string next_status(const std::string &current) const;
   void refresh_todos();
 
   void begin_edit();

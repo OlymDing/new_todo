@@ -35,17 +35,6 @@ void TuiApp::refresh_todos()
     selected_ = (int)items_.size() - 1;
 }
 
-std::string TuiApp::next_status(const std::string &current) const
-{
-  const auto &sv = cfg_.statuses;
-  if (sv.empty())
-    return current;
-  auto it = std::find(sv.begin(), sv.end(), current);
-  if (it == sv.end() || std::next(it) == sv.end())
-    return sv.front();
-  return *std::next(it);
-}
-
 void TuiApp::begin_edit()
 {
   if (items_.empty())
@@ -273,11 +262,13 @@ int TuiApp::run()
   due_opt.multiline = false;
   auto edit_due_input = Input(&edit_due_, due_opt);
 
+  auto edit_status_dropdown = Dropdown(&cfg_.statuses, &edit_status_idx_);
+
   auto edit_save_btn = Button("  Save  ", [&] { commit_edit(); });
   auto edit_cancel_btn = Button(" Cancel ", [&] { cancel_edit(); });
   auto edit_btns = Container::Horizontal({edit_save_btn, edit_cancel_btn});
   auto edit_inputs_comp = Container::Vertical(
-      {edit_title_input, edit_due_input, edit_note_input, edit_btns}
+      {edit_title_input, edit_status_dropdown, edit_due_input, edit_note_input, edit_btns}
   );
 
   // ---- Logout confirmation modal ----
@@ -393,23 +384,11 @@ int TuiApp::run()
   {
     if (modal_ == Modal::EditDetail && !items_.empty())
     {
-      const auto &t       = items_[selected_].todo;
-      std::string cur_status = cfg_.statuses.empty()
-                                   ? t.status
-                                   : cfg_.statuses[edit_status_idx_];
-      Element status_el = text(cur_status);
-      if (cur_status == "todo")
-        status_el = status_el | color(Color::Blue);
-      else if (cur_status == "in_progress")
-        status_el = status_el | color(Color::Yellow);
-      else if (cur_status == "done")
-        status_el = status_el | color(Color::Green);
-
       return vbox({
                  text(" Edit") | bold | color(Color::Yellow),
                  separator(),
                  hbox({text(" Title:   ") | bold, edit_title_input->Render()}),
-                 hbox({text(" Status:  ") | bold, status_el}),
+                 hbox({text(" Status:  ") | bold, edit_status_dropdown->Render()}),
                  hbox({text(" Due:     ") | bold, edit_due_input->Render(),
                        text("  YYYY-MM-DD") | dim}),
                  separator(),
@@ -607,18 +586,6 @@ int TuiApp::run()
           }
           return true;
         }
-        if (ev == Event::Character('s'))
-        {
-          if (!items_.empty())
-          {
-            const auto &t = items_[selected_].todo;
-            svc_.updateTodo(
-                t.id, std::nullopt, next_status(t.status), std::nullopt
-            );
-            refresh_todos();
-          }
-          return true;
-        }
         if (ev == Event::Character('u'))
         {
           begin_edit();
@@ -659,7 +626,7 @@ int TuiApp::run()
       {
         auto title_line = text(" new_todo") | bold;
         auto status_bar = text(
-                              " a:add-root  c:add-child  d:del  s:cycle  "
+                              " a:add-root  c:add-child  d:del  "
                               "u:edit  p:parent  /:search  j/k:\u2191\u2193  q:quit  Esc:logout"
                           ) |
                           dim;
