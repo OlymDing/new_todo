@@ -316,10 +316,10 @@ int TuiApp::run()
   {
     Elements rows;
     rows.push_back(hbox({
-        text("  ID") | bold,
-        text("  "),
-        text("Title                    ") | bold,
-        text("  "),
+        text("  ID ") | bold,
+        text("  ") | dim,
+        text("Title") | bold | size(WIDTH, EQUAL, 24),
+        text(" "),
         text("Status") | bold,
     }));
     rows.push_back(separator());
@@ -342,12 +342,59 @@ int TuiApp::run()
           prefix = std::string((item.depth - 1) * 2, ' ') +
                    (item.last_child ? "\u2514\u2500 " : "\u251c\u2500 ");
 
-        std::string id_str     = std::to_string(t.id);
-        int         title_budget = 22 - (int)prefix.size();
+        // prefix 字符宽度：前面的空格按字节算，末尾的 "└─ " / "├─ " 固定占 3 个显示字符
+        int prefix_char_width = (item.depth == 0)
+                                    ? 2
+                                    : (item.depth - 1) * 2 + 3;
+
+        std::string id_str       = std::to_string(t.id);
+        int         title_budget = 24 - prefix_char_width;
         if (title_budget < 5) title_budget = 5;
+
+        // 按 Unicode 字符截断，避免截断 UTF-8 多字节序列
+        auto utf8_truncate = [](const std::string &s, int max_chars) -> std::string
+        {
+          int char_count = 0;
+          int byte_pos   = 0;
+          while (byte_pos < (int)s.size() && char_count < max_chars)
+          {
+            unsigned char c = (unsigned char)s[byte_pos];
+            if (c < 0x80)
+              byte_pos += 1;
+            else if (c < 0xE0)
+              byte_pos += 2;
+            else if (c < 0xF0)
+              byte_pos += 3;
+            else
+              byte_pos += 4;
+            ++char_count;
+          }
+          return s.substr(0, byte_pos);
+        };
+
+        auto utf8_char_count = [](const std::string &s) -> int
+        {
+          int count    = 0;
+          int byte_pos = 0;
+          while (byte_pos < (int)s.size())
+          {
+            unsigned char c = (unsigned char)s[byte_pos];
+            if (c < 0x80)
+              byte_pos += 1;
+            else if (c < 0xE0)
+              byte_pos += 2;
+            else if (c < 0xF0)
+              byte_pos += 3;
+            else
+              byte_pos += 4;
+            ++count;
+          }
+          return count;
+        };
+
         std::string title =
-            t.title.size() > (size_t)title_budget
-                ? t.title.substr(0, title_budget - 1) + "\u2026"
+            utf8_char_count(t.title) > title_budget
+                ? utf8_truncate(t.title, title_budget - 3) + "..."
                 : t.title;
 
         Element status_el = text(t.status);
@@ -361,7 +408,8 @@ int TuiApp::run()
         auto row = hbox({
             text(std::string(4 - id_str.size(), ' ') + id_str + " "),
             text(prefix) | (item.depth > 0 ? dim : nothing),
-            text(title + std::string(title_budget - (int)title.size() + 1, ' ')),
+            text(title) | size(WIDTH, EQUAL, title_budget),
+            text(" "),
             status_el,
         });
 
