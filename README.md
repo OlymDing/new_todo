@@ -1,7 +1,12 @@
 # new_todo
 
-A terminal-based todo manager with a full-screen TUI and an interactive CLI,
-multi-user authentication, per-session persistence, and full-text search.
+船新的todo记事本，通过CLI + TUI交互，实乃居家办公 + 外出旅行必备！
+
+未来计划是一个去中心化快速团队TODO对齐工具，告别那些慢的要死的团队写作工具，拥抱高效人生
+
+下面都是AI写的废话，可看可不看
+
+have fun
 
 ---
 
