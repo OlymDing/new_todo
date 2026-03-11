@@ -539,6 +539,7 @@ int TuiApp::run()
           // No modal open: Esc shows logout confirmation.
           modal_ = Modal::ConfirmLogout;
           tab_focus_ = 6;
+          logout_yes->TakeFocus();
           return true;
         }
 
@@ -611,6 +612,7 @@ int TuiApp::run()
           add_input_.clear();
           modal_ = Modal::AddTodo;
           tab_focus_ = 1;
+          add_input->TakeFocus();
           return true;
         }
         if (ev == Event::Character('c'))
@@ -621,6 +623,7 @@ int TuiApp::run()
             add_input_.clear();
             modal_ = Modal::AddTodo;
             tab_focus_ = 1;
+            add_input->TakeFocus();
           }
           return true;
         }
@@ -631,12 +634,14 @@ int TuiApp::run()
             delete_id_ = items_[selected_].todo.id;
             modal_ = Modal::ConfirmDelete;
             tab_focus_ = 2;
+            del_yes->TakeFocus();
           }
           return true;
         }
         if (ev == Event::Character('u'))
         {
           begin_edit();
+          edit_title_input->TakeFocus();
           return true;
         }
         if (ev == Event::Character('p'))
@@ -646,6 +651,7 @@ int TuiApp::run()
             cp_input_.clear();
             modal_ = Modal::ChangeParent;
             tab_focus_ = 4;
+            cp_input_comp->TakeFocus();
           }
           return true;
         }
@@ -656,6 +662,7 @@ int TuiApp::run()
           search_selected_ = 0;
           modal_ = Modal::Search;
           tab_focus_ = 5;
+          search_input_comp->TakeFocus();
           return true;
         }
         if (ev == Event::Character('q'))
