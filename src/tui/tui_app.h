@@ -32,7 +32,8 @@ struct FlatItem
 class TuiApp
 {
 public:
-  TuiApp(Database &db, const AppConfig &cfg, int64_t user_id = 0);
+  TuiApp(Database &db, const AppConfig &cfg, int64_t user_id,
+         const std::string &session_path);
   int run();
 
 private:

@@ -16,7 +16,7 @@ namespace cli
 class CliApp
 {
 public:
-  CliApp(Database &db, const AppConfig &cfg);
+  CliApp(Database &db, const AppConfig &cfg, const std::string &session_path);
   int run(int argc, char **argv);
 
 private:

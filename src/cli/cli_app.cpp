@@ -17,8 +17,8 @@ using namespace ftxui;
 namespace cli
 {
 
-CliApp::CliApp(Database &db, const AppConfig &cfg)
-    : db_(db), cfg_(cfg), auth_(db_)
+CliApp::CliApp(Database &db, const AppConfig &cfg, const std::string &session_path)
+    : db_(db), cfg_(cfg), auth_(db_), session_(session_path)
 {
 }
 
@@ -59,7 +59,7 @@ int CliApp::run(int argc, char **argv)
     int choice = show_selector();
     if (choice == 0)
     {
-      tui::TuiApp tui_app(db_, cfg_, user_id);
+      tui::TuiApp tui_app(db_, cfg_, user_id, session_.path());
       return tui_app.run();
     }
     else

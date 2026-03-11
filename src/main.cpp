@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <string>
+#include <iostream>
 
 std::string GetExecutablePath() {
     char result[PATH_MAX];
@@ -17,14 +18,15 @@ int main(int argc, char **argv)
   AppConfig cfg;
   try
   {
-    cfg = ConfigLoader::load(GetExecutablePath() + "config.json");
+    cfg = ConfigLoader::load("config.json");
   }
   catch (...)
   {
     cfg = ConfigLoader::defaults();
   }
 
-  Database db(GetExecutablePath() + cfg.db_path);
-  cli::CliApp app(db, cfg);
+  std::cout << GetExecutablePath();
+  Database db(cfg.db_path);
+  cli::CliApp app(db, cfg, "session");
   return app.run(argc, argv);
 }
