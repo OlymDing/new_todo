@@ -1,9 +1,12 @@
 #pragma once
+
+#include "auth.h"
 #include "config.h"
 #include "db.h"
 #include "session.h"
 #include "todo_service.h"
 #include "todo.h"
+
 #include <string>
 #include <vector>
 #include <ctime>
@@ -32,14 +35,16 @@ struct FlatItem
 class TuiApp
 {
 public:
-  TuiApp(Database &db, const AppConfig &cfg, int64_t user_id,
-         const std::string &session_path);
+  TuiApp(Database &db, const AppConfig &cfg, const std::string &session_path);
   int run();
 
 private:
   Database &db_;
   const AppConfig &cfg_;
-  TodoService svc_;
+  AuthService auth_;
+  SessionManager session_;
+  // svc_ is constructed after login.
+  std::optional<TodoService> svc_;
 
   std::vector<FlatItem> items_;
   int selected_ = 0;
@@ -49,34 +54,35 @@ private:
   std::string add_due_;
   int64_t delete_id_ = 0;
   int64_t add_parent_id_ = 0;
-  std::string cp_input_; // change-parent: new parent id input
+  std::string cp_input_;
 
-  // search state
   std::string        search_query_;
   std::vector<Todo>  search_results_;
   int                search_selected_ = 0;
 
-  // edit buffers
   std::string edit_title_;
   std::string edit_ext_info_;
-  std::string edit_due_; // "YYYY-MM-DD" or "" for no due date
+  std::string edit_due_;
   int edit_status_idx_ = 0;
 
-  // panel/tab focus
   int focus_panel_ = 0;
   int tab_focus_ = 0;
-  int left_size_ = 48; // resizable split: left panel width in columns
+  int left_size_ = 48;
 
-  SessionManager session_;
+  // Returns user_id (0 = cancelled / failed).
+  int64_t show_login_screen();
+
+  int run_main();
+
+  int run_main(int64_t user_id);
 
   void refresh_todos();
-
   void begin_edit();
   void commit_edit();
   void cancel_edit();
   std::string format_timestamp(int64_t ts) const;
-  std::string format_date(int64_t ts) const;          // "YYYY-MM-DD" or ""
-  int64_t parse_due_date(const std::string &s) const; // 0 on empty/invalid
+  std::string format_date(int64_t ts) const;
+  int64_t parse_due_date(const std::string &s) const;
 };
 
 } // namespace tui

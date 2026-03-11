@@ -17,14 +17,19 @@ class CliApp
 {
 public:
   CliApp(Database &db, const AppConfig &cfg, const std::string &session_path);
-  int run(int argc, char **argv);
+
+  // Checks session → env vars → FTXUI login screen. Returns user_id or 0.
+  int64_t authenticate();
+
+  // Run a single command (argc/argv) or drop into REPL if no command given.
+  // Requires a valid user_id from authenticate().
+  int run(int argc, char **argv, int64_t user_id);
 
 private:
   Database &db_;
   const AppConfig &cfg_;
   AuthService auth_;
   SessionManager session_;
-  // svc_ is constructed after login; use optional to allow deferred init.
   std::optional<TodoService> svc_;
 
   static std::optional<std::string>
@@ -37,13 +42,8 @@ private:
       const std::vector<std::string> &args
   );
 
-  int run_loop(const std::string &prog); // interactive REPL loop
-  int show_selector();                   // FTXUI selector: 0=TUI, 1=CLI
-
-  // Returns the authenticated user_id, or 0 on failure.
-  // Tries TODO_USER / TODO_PASS env vars first, then shows FTXUI login screen.
-  int64_t authenticate();
-  int64_t show_login_screen(); // FTXUI login/register; returns user_id or 0
+  int run_loop(const std::string &prog);
+  int64_t show_login_screen();
 };
 
 } // namespace cli

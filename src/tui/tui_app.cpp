@@ -4,16 +4,141 @@
 #include <ftxui/dom/elements.hpp>
 #include <algorithm>
 #include <functional>
+#include <iostream>
 using namespace ftxui;
 
 namespace tui
 {
 
-TuiApp::TuiApp(Database &db, const AppConfig &cfg, int64_t user_id,
-               const std::string &session_path)
-    : db_(db), cfg_(cfg), svc_(db_, cfg_, user_id), session_(session_path)
+TuiApp::TuiApp(Database &db, const AppConfig &cfg, const std::string &session_path)
+    : db_(db), cfg_(cfg), auth_(db_), session_(session_path)
 {
 }
+
+// ── Login screen ─────────────────────────────────────────────────────────────
+
+int64_t TuiApp::show_login_screen()
+{
+  int tab = 0;
+  std::string username, password, message;
+  int64_t result_id = 0;
+
+  auto screen = ScreenInteractive::TerminalOutput();
+
+  InputOption pw_opt;
+  pw_opt.password = true;
+  auto login_user_input = Input(&username, "Username");
+  auto login_pass_input = Input(&password, "Password", pw_opt);
+  auto login_ok = Button("  Login  ", [&]
+  {
+    try
+    {
+      auto u = auth_.login(username, password);
+      if (u)
+      {
+        session_.save(u->id, u->username);
+        result_id = u->id;
+        screen.ExitLoopClosure()();
+      }
+      else
+        message = "Invalid username or password.";
+    }
+    catch (const std::exception &e) { message = e.what(); }
+  });
+
+  std::string reg_user, reg_pass, reg_confirm;
+  InputOption reg_pw_opt;
+  reg_pw_opt.password = true;
+  auto reg_user_input    = Input(&reg_user, "Username");
+  auto reg_pass_input    = Input(&reg_pass, "Password", reg_pw_opt);
+  auto reg_confirm_input = Input(&reg_confirm, "Confirm password", reg_pw_opt);
+  auto reg_ok = Button("  Register  ", [&]
+  {
+    try
+    {
+      if (reg_pass != reg_confirm) { message = "Passwords do not match."; return; }
+      int64_t id = auth_.registerUser(reg_user, reg_pass);
+      session_.save(id, reg_user);
+      result_id = id;
+      screen.ExitLoopClosure()();
+    }
+    catch (const std::exception &e) { message = e.what(); }
+  });
+
+  auto login_comp = Container::Vertical({login_user_input, login_pass_input, login_ok});
+  auto reg_comp   = Container::Vertical({reg_user_input, reg_pass_input, reg_confirm_input, reg_ok});
+  auto tab_comp   = Container::Tab({login_comp, reg_comp}, &tab);
+
+  auto toggle_login    = Button(" Login ",    [&] { tab = 0; message.clear(); });
+  auto toggle_register = Button(" Register ", [&] { tab = 1; message.clear(); });
+  auto tab_toggle      = Container::Horizontal({toggle_login, toggle_register});
+  auto root            = Container::Vertical({tab_toggle, tab_comp});
+  auto evented         = CatchEvent(root, [&](Event ev) -> bool
+  {
+    if (ev == Event::Escape) { screen.ExitLoopClosure()(); return true; }
+    return false;
+  });
+
+  auto renderer = Renderer(evented, [&]
+  {
+    Element form;
+    if (tab == 0)
+    {
+      form = vbox({
+          hbox({text(" User: ") | bold, login_user_input->Render()}),
+          hbox({text(" Pass: ") | bold, login_pass_input->Render()}),
+          separator(),
+          login_ok->Render(),
+      });
+    }
+    else
+    {
+      form = vbox({
+          hbox({text(" User:     ") | bold, reg_user_input->Render()}),
+          hbox({text(" Pass:     ") | bold, reg_pass_input->Render()}),
+          hbox({text(" Confirm:  ") | bold, reg_confirm_input->Render()}),
+          separator(),
+          reg_ok->Render(),
+      });
+    }
+    return vbox({
+               text("  new_todo") | bold,
+               separator(),
+               hbox({toggle_login->Render(), text("  "), toggle_register->Render()}),
+               separator(),
+               form,
+               separator(),
+               text(message.empty() ? "" : " " + message) | color(Color::Red),
+               separator(),
+               text("  Esc: quit") | dim,
+           }) |
+           border | size(WIDTH, EQUAL, 45) | center;
+  });
+
+  screen.Loop(renderer);
+  std::cout << "\033[2J\033[H" << std::flush;
+  return result_id;
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+int TuiApp::run()
+{
+  // Reuse active session, otherwise show login screen.
+  int64_t user_id = 0;
+  if (auto s = session_.load())
+    user_id = s->user_id;
+  else
+    user_id = show_login_screen();
+
+  if (user_id == 0)
+    return 1;
+
+  svc_.emplace(db_, cfg_, user_id);
+  return run_main();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 void TuiApp::refresh_todos()
 {
@@ -28,7 +153,7 @@ void TuiApp::refresh_todos()
       dfs(nodes[i].children, depth + 1);
     }
   };
-  dfs(svc_.getTree(), 0);
+  dfs(svc_->getTree(), 0);
 
   if (items_.empty())
     selected_ = 0;
@@ -60,10 +185,9 @@ void TuiApp::commit_edit()
     std::string new_status =
         cfg_.statuses.empty() ? t.status : cfg_.statuses[edit_status_idx_];
     int64_t new_due = parse_due_date(edit_due_);
-    svc_.updateTodo(
+    svc_->updateTodo(
         t.id,
-        edit_title_.empty() ? std::nullopt
-                            : std::optional<std::string>(edit_title_),
+        edit_title_.empty() ? std::nullopt : std::optional<std::string>(edit_title_),
         new_status, edit_ext_info_, std::optional<Timestamp>(new_due)
     );
     refresh_todos();
@@ -84,8 +208,7 @@ void TuiApp::cancel_edit()
 
 std::string TuiApp::format_timestamp(int64_t ts) const
 {
-  if (ts == 0)
-    return "(none)";
+  if (ts == 0) return "(none)";
   std::time_t t = (std::time_t)ts;
   char buf[32];
   std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", std::localtime(&t));
@@ -94,8 +217,7 @@ std::string TuiApp::format_timestamp(int64_t ts) const
 
 std::string TuiApp::format_date(int64_t ts) const
 {
-  if (ts == 0)
-    return "";
+  if (ts == 0) return "";
   std::time_t t = (std::time_t)ts;
   char buf[16];
   std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::localtime(&t));
@@ -104,25 +226,20 @@ std::string TuiApp::format_date(int64_t ts) const
 
 int64_t TuiApp::parse_due_date(const std::string &s) const
 {
-  if (s.empty())
-    return 0;
+  if (s.empty()) return 0;
   std::tm tm = {};
-  // Accept "YYYY-MM-DD"
-  if (std::sscanf(
-          s.c_str(), "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday
-      ) != 3)
+  if (std::sscanf(s.c_str(), "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) != 3)
     return 0;
   tm.tm_year -= 1900;
-  tm.tm_mon -= 1;
-  tm.tm_hour = 0;
-  tm.tm_min = 0;
-  tm.tm_sec = 0;
+  tm.tm_mon  -= 1;
   tm.tm_isdst = -1;
   std::time_t ts = std::mktime(&tm);
   return (ts == (std::time_t)-1) ? 0 : (int64_t)ts;
 }
 
-int TuiApp::run()
+// ── Main TUI loop ─────────────────────────────────────────────────────────────
+
+int TuiApp::run_main()
 {
   refresh_todos();
 
@@ -136,7 +253,6 @@ int TuiApp::run()
   InputOption add_due_opt;
   add_due_opt.multiline = false;
   auto add_due_input = Input(&add_due_, add_due_opt);
-  int add_focus = 0; // unused, kept for reference
   auto add_ok = Button(
       "  OK  ",
       [&]
@@ -146,22 +262,17 @@ int TuiApp::run()
           int64_t due = parse_due_date(add_due_);
           if (add_parent_id_ == 0)
           {
-            int64_t id = svc_.addTodo(add_input_, "", add_note_);
+            int64_t id = svc_->addTodo(add_input_, "", add_note_);
             if (due != 0)
-              svc_.updateTodo(
-                  id, std::nullopt, std::nullopt, std::nullopt,
-                  std::optional<Timestamp>(due)
-              );
+              svc_->updateTodo(id, std::nullopt, std::nullopt, std::nullopt,
+                               std::optional<Timestamp>(due));
           }
           else
           {
-            int64_t id =
-                svc_.addChild(add_parent_id_, add_input_, "", add_note_);
+            int64_t id = svc_->addChild(add_parent_id_, add_input_, "", add_note_);
             if (due != 0)
-              svc_.updateTodo(
-                  id, std::nullopt, std::nullopt, std::nullopt,
-                  std::optional<Timestamp>(due)
-              );
+              svc_->updateTodo(id, std::nullopt, std::nullopt, std::nullopt,
+                               std::optional<Timestamp>(due));
           }
           add_input_.clear();
           add_note_.clear();
@@ -184,9 +295,7 @@ int TuiApp::run()
       }
   );
   auto add_buttons = Container::Horizontal({add_ok, add_cancel});
-  auto add_comp = Container::Vertical(
-      {add_input, add_due_input, add_note_input, add_buttons}
-  );
+  auto add_comp    = Container::Vertical({add_input, add_due_input, add_note_input, add_buttons});
 
   // ---- Delete modal ----
   auto del_yes = Button(
@@ -195,7 +304,7 @@ int TuiApp::run()
       {
         if (delete_id_ != 0)
         {
-          svc_.deleteTodo(delete_id_);
+          svc_->deleteTodo(delete_id_);
           delete_id_ = 0;
           refresh_todos();
         }
@@ -205,12 +314,7 @@ int TuiApp::run()
   );
   auto del_no = Button(
       "  No   ",
-      [&]
-      {
-        delete_id_ = 0;
-        modal_ = Modal::None;
-        tab_focus_ = 0;
-      }
+      [&] { delete_id_ = 0; modal_ = Modal::None; tab_focus_ = 0; }
   );
   auto del_comp = Container::Horizontal({del_yes, del_no});
 
@@ -225,12 +329,10 @@ int TuiApp::run()
           try
           {
             int64_t new_pid = std::stoll(cp_input_);
-            svc_.changeParent(items_[selected_].todo.id, new_pid);
+            svc_->changeParent(items_[selected_].todo.id, new_pid);
             refresh_todos();
           }
-          catch (...)
-          {
-          }
+          catch (...) {}
         }
         cp_input_.clear();
         modal_ = Modal::None;
@@ -239,80 +341,61 @@ int TuiApp::run()
   );
   auto cp_cancel = Button(
       "Cancel",
-      [&]
-      {
-        cp_input_.clear();
-        modal_ = Modal::None;
-        tab_focus_ = 0;
-      }
+      [&] { cp_input_.clear(); modal_ = Modal::None; tab_focus_ = 0; }
   );
-  auto cp_buttons = Container::Horizontal({cp_ok, cp_cancel});
-  auto cp_comp = Container::Vertical({cp_input_comp, cp_buttons});
+  auto cp_comp = Container::Vertical({cp_input_comp, Container::Horizontal({cp_ok, cp_cancel})});
 
   // ---- Edit detail components ----
   InputOption title_opt;
   title_opt.multiline = false;
   title_opt.on_enter = [&] { commit_edit(); };
-  auto edit_title_input = Input(&edit_title_, title_opt);
-
+  auto edit_title_input    = Input(&edit_title_, title_opt);
   InputOption note_opt;
   note_opt.multiline = true;
-  auto edit_note_input = Input(&edit_ext_info_, note_opt);
-
+  auto edit_note_input     = Input(&edit_ext_info_, note_opt);
   InputOption due_opt;
   due_opt.multiline = false;
-  auto edit_due_input = Input(&edit_due_, due_opt);
-
+  auto edit_due_input      = Input(&edit_due_, due_opt);
   auto edit_status_dropdown = Dropdown(&cfg_.statuses, &edit_status_idx_);
-
-  auto edit_save_btn = Button("  Save  ", [&] { commit_edit(); });
-  auto edit_cancel_btn = Button(" Cancel ", [&] { cancel_edit(); });
-  auto edit_btns = Container::Horizontal({edit_save_btn, edit_cancel_btn});
-  auto edit_inputs_comp = Container::Vertical(
-      {edit_title_input, edit_status_dropdown, edit_due_input, edit_note_input, edit_btns}
+  auto edit_save_btn       = Button("  Save  ", [&] { commit_edit(); });
+  auto edit_cancel_btn     = Button(" Cancel ", [&] { cancel_edit(); });
+  auto edit_inputs_comp    = Container::Vertical(
+      {edit_title_input, edit_status_dropdown, edit_due_input, edit_note_input,
+       Container::Horizontal({edit_save_btn, edit_cancel_btn})}
   );
 
   // ---- Logout confirmation modal ----
   auto logout_yes = Button(
       "  Yes  ",
-      [&]
-      {
-        session_.clear();
-        screen.ExitLoopClosure()();
-      }
+      [&] { session_.clear(); screen.ExitLoopClosure()(); }
   );
   auto logout_no = Button(
       "  No   ",
-      [&]
-      {
-        modal_ = Modal::None;
-        tab_focus_ = 0;
-      }
+      [&] { modal_ = Modal::None; tab_focus_ = 0; }
   );
   auto logout_comp = Container::Horizontal({logout_yes, logout_no});
 
-  // ---- Tab container (0=main, 1=add, 2=delete, 3=edit, 4=change-parent, 5=search, 6=logout) ----
-  // Search input component — onChange triggers a live FTS query.
+  // ---- Search ----
   InputOption search_opt;
   search_opt.multiline = false;
   search_opt.on_change = [&]
   {
     search_selected_ = 0;
-    search_results_ = search_query_.empty()
-                          ? std::vector<Todo>{}
-                          : svc_.search(search_query_);
+    search_results_  = search_query_.empty()
+                           ? std::vector<Todo>{}
+                           : svc_->search(search_query_);
   };
   auto search_input_comp = Input(&search_query_, "Search...", search_opt);
   auto search_comp       = Container::Vertical({search_input_comp});
 
+  // ---- Tab container ----
   auto dummy = Renderer([] { return text(""); });
   auto tab_container = Container::Tab(
-      {dummy, add_comp, del_comp, edit_inputs_comp, cp_comp, search_comp,
-       logout_comp},
+      {dummy, add_comp, del_comp, edit_inputs_comp, cp_comp, search_comp, logout_comp},
       &tab_focus_
   );
 
-  // ---- Left panel component ----
+  // ---- Left panel ----
   auto left_comp = Renderer(tab_container, [&]
   {
     Elements rows;
@@ -343,31 +426,21 @@ int TuiApp::run()
           prefix = std::string((item.depth - 1) * 2, ' ') +
                    (item.last_child ? "\u2514\u2500 " : "\u251c\u2500 ");
 
-        // prefix 字符宽度：前面的空格按字节算，末尾的 "└─ " / "├─ " 固定占 3 个显示字符
-        int prefix_char_width = (item.depth == 0)
-                                    ? 2
-                                    : (item.depth - 1) * 2 + 3;
-
-        std::string id_str       = std::to_string(t.id);
-        int         title_budget = 24 - prefix_char_width;
+        int prefix_char_width = (item.depth == 0) ? 2 : (item.depth - 1) * 2 + 3;
+        std::string id_str    = std::to_string(t.id);
+        int title_budget      = 24 - prefix_char_width;
         if (title_budget < 5) title_budget = 5;
 
-        // 按 Unicode 字符截断，避免截断 UTF-8 多字节序列
         auto utf8_truncate = [](const std::string &s, int max_chars) -> std::string
         {
-          int char_count = 0;
-          int byte_pos   = 0;
+          int char_count = 0, byte_pos = 0;
           while (byte_pos < (int)s.size() && char_count < max_chars)
           {
             unsigned char c = (unsigned char)s[byte_pos];
-            if (c < 0x80)
-              byte_pos += 1;
-            else if (c < 0xE0)
-              byte_pos += 2;
-            else if (c < 0xF0)
-              byte_pos += 3;
-            else
-              byte_pos += 4;
+            if      (c < 0x80) byte_pos += 1;
+            else if (c < 0xE0) byte_pos += 2;
+            else if (c < 0xF0) byte_pos += 3;
+            else               byte_pos += 4;
             ++char_count;
           }
           return s.substr(0, byte_pos);
@@ -375,19 +448,14 @@ int TuiApp::run()
 
         auto utf8_char_count = [](const std::string &s) -> int
         {
-          int count    = 0;
-          int byte_pos = 0;
+          int count = 0, byte_pos = 0;
           while (byte_pos < (int)s.size())
           {
             unsigned char c = (unsigned char)s[byte_pos];
-            if (c < 0x80)
-              byte_pos += 1;
-            else if (c < 0xE0)
-              byte_pos += 2;
-            else if (c < 0xF0)
-              byte_pos += 3;
-            else
-              byte_pos += 4;
+            if      (c < 0x80) byte_pos += 1;
+            else if (c < 0xE0) byte_pos += 2;
+            else if (c < 0xF0) byte_pos += 3;
+            else               byte_pos += 4;
             ++count;
           }
           return count;
@@ -399,12 +467,9 @@ int TuiApp::run()
                 : t.title;
 
         Element status_el = text(t.status);
-        if (t.status == "todo")
-          status_el = status_el | color(Color::Blue);
-        else if (t.status == "in_progress")
-          status_el = status_el | color(Color::Yellow);
-        else if (t.status == "done")
-          status_el = status_el | color(Color::Green);
+        if      (t.status == "todo")        status_el = status_el | color(Color::Blue);
+        else if (t.status == "in_progress") status_el = status_el | color(Color::Yellow);
+        else if (t.status == "done")        status_el = status_el | color(Color::Green);
 
         auto row = hbox({
             text(std::string(4 - id_str.size(), ' ') + id_str + " "),
@@ -420,15 +485,10 @@ int TuiApp::run()
       }
     }
 
-    return vbox({
-               text(" List") | bold,
-               separator(),
-               vbox(rows) | yframe,
-           }) |
-           border;
+    return vbox({text(" List") | bold, separator(), vbox(rows) | yframe}) | border;
   });
 
-  // ---- Right panel component ----
+  // ---- Right panel ----
   auto right_comp = Renderer(tab_container, [&]
   {
     if (modal_ == Modal::EditDetail && !items_.empty())
@@ -445,8 +505,7 @@ int TuiApp::run()
                  edit_note_input->Render() | size(HEIGHT, GREATER_THAN, 4),
                  filler(),
                  separator(),
-                 hbox({edit_save_btn->Render(), text("  "),
-                       edit_cancel_btn->Render()}),
+                 hbox({edit_save_btn->Render(), text("  "), edit_cancel_btn->Render()}),
                  separator(),
                  text("  Tab:next  Enter:save  Esc:cancel") | dim,
              }) |
@@ -456,12 +515,9 @@ int TuiApp::run()
     {
       const auto &t = items_[selected_].todo;
       Element status_el = text(t.status);
-      if (t.status == "todo")
-        status_el = status_el | color(Color::Blue);
-      else if (t.status == "in_progress")
-        status_el = status_el | color(Color::Yellow);
-      else if (t.status == "done")
-        status_el = status_el | color(Color::Green);
+      if      (t.status == "todo")        status_el = status_el | color(Color::Blue);
+      else if (t.status == "in_progress") status_el = status_el | color(Color::Yellow);
+      else if (t.status == "done")        status_el = status_el | color(Color::Green);
 
       return vbox({
                  text(" Detail") | bold,
@@ -475,19 +531,12 @@ int TuiApp::run()
                  paragraph(t.ext_info.empty() ? "(none)" : t.ext_info) | dim,
                  filler(),
                  separator(),
-                 hbox({text(" Created: ") | dim,
-                       text(format_timestamp(t.create_time)) | dim}),
-                 hbox({text(" Updated: ") | dim,
-                       text(format_timestamp(t.update_time)) | dim}),
+                 hbox({text(" Created: ") | dim, text(format_timestamp(t.create_time)) | dim}),
+                 hbox({text(" Updated: ") | dim, text(format_timestamp(t.update_time)) | dim}),
              }) |
              border | flex;
     }
-    return vbox({
-               text(" Detail") | bold,
-               separator(),
-               text("  (no selection)") | dim,
-               filler(),
-           }) |
+    return vbox({text(" Detail") | bold, separator(), text("  (no selection)") | dim, filler()}) |
            border | flex;
   });
 
@@ -499,120 +548,65 @@ int TuiApp::run()
       split,
       [&](Event ev) -> bool
       {
-        // Escape: close all modals
         if (ev == Event::Escape)
         {
           if (modal_ == Modal::AddTodo || modal_ == Modal::ConfirmDelete)
           {
-            add_input_.clear();
-            delete_id_ = 0;
-            modal_ = Modal::None;
-            tab_focus_ = 0;
+            add_input_.clear(); delete_id_ = 0;
+            modal_ = Modal::None; tab_focus_ = 0;
             return true;
           }
-          if (modal_ == Modal::EditDetail)
-          {
-            cancel_edit();
-            return true;
-          }
+          if (modal_ == Modal::EditDetail)   { cancel_edit(); return true; }
           if (modal_ == Modal::ChangeParent)
           {
-            cp_input_.clear();
-            modal_ = Modal::None;
-            tab_focus_ = 0;
+            cp_input_.clear(); modal_ = Modal::None; tab_focus_ = 0;
             return true;
           }
           if (modal_ == Modal::Search)
           {
-            search_query_.clear();
-            search_results_.clear();
-            search_selected_ = 0;
-            modal_ = Modal::None;
-            tab_focus_ = 0;
+            search_query_.clear(); search_results_.clear(); search_selected_ = 0;
+            modal_ = Modal::None; tab_focus_ = 0;
             return true;
           }
           if (modal_ == Modal::ConfirmLogout)
           {
-            modal_ = Modal::None;
-            tab_focus_ = 0;
+            modal_ = Modal::None; tab_focus_ = 0;
             return true;
           }
-          // No modal open: Esc shows logout confirmation.
           modal_ = Modal::ConfirmLogout;
           tab_focus_ = 6;
           logout_yes->TakeFocus();
           return true;
         }
 
-        // Search modal: handle navigation and confirm inside the modal.
         if (modal_ == Modal::Search)
         {
-          if (ev == Event::ArrowUp)
-          {
-            if (search_selected_ > 0)
-              --search_selected_;
-            return true;
-          }
-          if (ev == Event::ArrowDown)
-          {
-            if (search_selected_ < (int)search_results_.size() - 1)
-              ++search_selected_;
-            return true;
-          }
+          if (ev == Event::ArrowUp)   { if (search_selected_ > 0) --search_selected_; return true; }
+          if (ev == Event::ArrowDown) { if (search_selected_ < (int)search_results_.size() - 1) ++search_selected_; return true; }
           if (ev == Event::Return && !search_results_.empty())
           {
-            // Jump to the selected result in the main list.
             int64_t target = search_results_[search_selected_].id;
             for (int i = 0; i < (int)items_.size(); ++i)
-            {
-              if (items_[i].todo.id == target)
-              {
-                selected_ = i;
-                break;
-              }
-            }
-            search_query_.clear();
-            search_results_.clear();
-            search_selected_ = 0;
-            modal_ = Modal::None;
-            tab_focus_ = 0;
+              if (items_[i].todo.id == target) { selected_ = i; break; }
+            search_query_.clear(); search_results_.clear(); search_selected_ = 0;
+            modal_ = Modal::None; tab_focus_ = 0;
             return true;
           }
-          // All other keys (typing) pass through to search_input_comp.
           return false;
         }
 
-        // AddTodo / ConfirmDelete / ChangeParent: pass through to modal
-        // component
         if (modal_ == Modal::AddTodo || modal_ == Modal::ConfirmDelete ||
-            modal_ == Modal::ChangeParent)
+            modal_ == Modal::ChangeParent || modal_ == Modal::EditDetail)
           return false;
 
-        // EditDetail mode: only Escape is handled above; all other keys pass
-        // through to edit_inputs_comp so that characters (including 's') type
-        // into the fields.
-        if (modal_ == Modal::EditDetail)
-          return false;
-
-        // Normal mode (left panel)
-        if (ev == Event::ArrowUp || ev == Event::Character('k'))
-        {
-          if (!items_.empty() && selected_ > 0)
-            --selected_;
-          return true;
-        }
+        if (ev == Event::ArrowUp   || ev == Event::Character('k'))
+          { if (!items_.empty() && selected_ > 0) --selected_; return true; }
         if (ev == Event::ArrowDown || ev == Event::Character('j'))
-        {
-          if (!items_.empty() && selected_ < (int)items_.size() - 1)
-            ++selected_;
-          return true;
-        }
+          { if (!items_.empty() && selected_ < (int)items_.size() - 1) ++selected_; return true; }
         if (ev == Event::Character('a'))
         {
-          add_parent_id_ = 0;
-          add_input_.clear();
-          modal_ = Modal::AddTodo;
-          tab_focus_ = 1;
+          add_parent_id_ = 0; add_input_.clear();
+          modal_ = Modal::AddTodo; tab_focus_ = 1;
           add_input->TakeFocus();
           return true;
         }
@@ -620,10 +614,8 @@ int TuiApp::run()
         {
           if (!items_.empty())
           {
-            add_parent_id_ = items_[selected_].todo.id;
-            add_input_.clear();
-            modal_ = Modal::AddTodo;
-            tab_focus_ = 1;
+            add_parent_id_ = items_[selected_].todo.id; add_input_.clear();
+            modal_ = Modal::AddTodo; tab_focus_ = 1;
             add_input->TakeFocus();
           }
           return true;
@@ -633,195 +625,141 @@ int TuiApp::run()
           if (!items_.empty())
           {
             delete_id_ = items_[selected_].todo.id;
-            modal_ = Modal::ConfirmDelete;
-            tab_focus_ = 2;
+            modal_ = Modal::ConfirmDelete; tab_focus_ = 2;
             del_yes->TakeFocus();
           }
           return true;
         }
         if (ev == Event::Character('u'))
-        {
-          begin_edit();
-          edit_title_input->TakeFocus();
-          return true;
-        }
+          { begin_edit(); edit_title_input->TakeFocus(); return true; }
         if (ev == Event::Character('p'))
         {
           if (!items_.empty())
           {
-            cp_input_.clear();
-            modal_ = Modal::ChangeParent;
-            tab_focus_ = 4;
+            cp_input_.clear(); modal_ = Modal::ChangeParent; tab_focus_ = 4;
             cp_input_comp->TakeFocus();
           }
           return true;
         }
         if (ev == Event::Character('/'))
         {
-          search_query_.clear();
-          search_results_.clear();
-          search_selected_ = 0;
-          modal_ = Modal::Search;
-          tab_focus_ = 5;
+          search_query_.clear(); search_results_.clear(); search_selected_ = 0;
+          modal_ = Modal::Search; tab_focus_ = 5;
           search_input_comp->TakeFocus();
           return true;
         }
-        if (ev == Event::Character('q'))
-        {
-          screen.ExitLoopClosure()();
-          return true;
-        }
+        if (ev == Event::Character('q')) { screen.ExitLoopClosure()(); return true; }
         return false;
       }
   );
 
-  // ---- Renderer ----
-  auto final_renderer = Renderer(
-      main_comp,
-      [&]
+  // ---- Final renderer ----
+  auto final_renderer = Renderer(main_comp, [&]
+  {
+    auto title_line = text(" new_todo") | bold;
+    auto status_bar = text(
+        " a:add-root  c:add-child  d:del  "
+        "u:edit  p:parent  /:search  j/k:\u2191\u2193  q:quit  Esc:logout"
+    ) | dim;
+    auto main_view = vbox({title_line, main_comp->Render() | flex, status_bar});
+
+    if (modal_ == Modal::AddTodo)
+    {
+      std::string modal_title = (add_parent_id_ == 0) ? " Add Root Todo" : " Add Child Todo";
+      auto modal_view =
+          vbox({
+              text(modal_title) | bold, separator(),
+              hbox({text(" Title: ") | bold, add_input->Render()}),
+              hbox({text(" Due:   ") | bold, add_due_input->Render(), text("  YYYY-MM-DD") | dim}),
+              separator(),
+              text(" Notes:") | bold,
+              add_note_input->Render() | size(HEIGHT, GREATER_THAN, 3),
+              separator(),
+              hbox({add_ok->Render(), text("  "), add_cancel->Render()}),
+          }) |
+          border | size(WIDTH, EQUAL, 50) | center;
+      return dbox({main_view, clear_under(modal_view | center)});
+    }
+
+    if (modal_ == Modal::ConfirmDelete)
+    {
+      std::string del_title = (delete_id_ > 0 && !items_.empty()) ? items_[selected_].todo.title : "";
+      auto modal_view =
+          vbox({
+              text(" Delete Todo") | bold, separator(),
+              text(" Delete: \"" + del_title + "\"?"), separator(),
+              hbox({del_yes->Render(), text("  "), del_no->Render()}),
+          }) |
+          border | size(WIDTH, EQUAL, 40) | center;
+      return dbox({main_view, clear_under(modal_view | center)});
+    }
+
+    if (modal_ == Modal::ChangeParent && !items_.empty())
+    {
+      const auto &t = items_[selected_].todo;
+      std::string cur_parent = t.parent_id == 0 ? "root" : "#" + std::to_string(t.parent_id);
+      auto modal_view =
+          vbox({
+              text(" Change Parent") | bold, separator(),
+              text(" Todo: \"" + t.title + "\""),
+              text(" Current parent: " + cur_parent) | dim, separator(),
+              hbox({text(" New parent ID: ") | bold, cp_input_comp->Render()}),
+              text(" (enter 0 to make root)") | dim, separator(),
+              hbox({cp_ok->Render(), text("  "), cp_cancel->Render()}),
+          }) |
+          border | size(WIDTH, EQUAL, 50) | center;
+      return dbox({main_view, clear_under(modal_view | center)});
+    }
+
+    if (modal_ == Modal::Search)
+    {
+      Elements result_rows;
+      if (search_results_.empty())
       {
-        auto title_line = text(" new_todo") | bold;
-        auto status_bar = text(
-                              " a:add-root  c:add-child  d:del  "
-                              "u:edit  p:parent  /:search  j/k:\u2191\u2193  q:quit  Esc:logout"
-                          ) |
-                          dim;
-        auto main_view = vbox({title_line, main_comp->Render() | flex, status_bar});
-
-        // Overlay modals
-        if (modal_ == Modal::AddTodo)
-        {
-          std::string modal_title =
-              (add_parent_id_ == 0) ? " Add Root Todo" : " Add Child Todo";
-          auto modal_view =
-              vbox({
-                  text(modal_title) | bold,
-                  separator(),
-                  hbox({text(" Title: ") | bold, add_input->Render()}),
-                  hbox(
-                      {text(" Due:   ") | bold, add_due_input->Render(),
-                       text("  YYYY-MM-DD") | dim}
-                  ),
-                  separator(),
-                  text(" Notes:") | bold,
-                  add_note_input->Render() | size(HEIGHT, GREATER_THAN, 3),
-                  separator(),
-                  hbox({add_ok->Render(), text("  "), add_cancel->Render()}),
-              }) |
-              border | size(WIDTH, EQUAL, 50) | center;
-          return dbox({main_view, clear_under(modal_view | center)});
-        }
-
-        if (modal_ == Modal::ConfirmDelete)
-        {
-          std::string del_title = (delete_id_ > 0 && !items_.empty())
-                                      ? items_[selected_].todo.title
-                                      : "";
-          auto modal_view =
-              vbox({
-                  text(" Delete Todo") | bold,
-                  separator(),
-                  text(" Delete: \"" + del_title + "\"?"),
-                  separator(),
-                  hbox({del_yes->Render(), text("  "), del_no->Render()}),
-              }) |
-              border | size(WIDTH, EQUAL, 40) | center;
-          return dbox({main_view, clear_under(modal_view | center)});
-        }
-
-        if (modal_ == Modal::ChangeParent && !items_.empty())
-        {
-          const auto &t = items_[selected_].todo;
-          std::string cur_parent =
-              t.parent_id == 0 ? "root" : "#" + std::to_string(t.parent_id);
-          auto modal_view =
-              vbox({
-                  text(" Change Parent") | bold,
-                  separator(),
-                  text(" Todo: \"" + t.title + "\""),
-                  text(" Current parent: " + cur_parent) | dim,
-                  separator(),
-                  hbox(
-                      {text(" New parent ID: ") | bold, cp_input_comp->Render()}
-                  ),
-                  text(" (enter 0 to make root)") | dim,
-                  separator(),
-                  hbox({cp_ok->Render(), text("  "), cp_cancel->Render()}),
-              }) |
-              border | size(WIDTH, EQUAL, 50) | center;
-          return dbox({main_view, clear_under(modal_view | center)});
-        }
-
-        if (modal_ == Modal::Search)
-        {
-          Elements result_rows;
-          if (search_results_.empty())
-          {
-            result_rows.push_back(
-                text(search_query_.empty() ? "  Type to search…"
-                                           : "  (no results)") |
-                dim
-            );
-          }
-          else
-          {
-            for (int i = 0; i < (int)search_results_.size(); ++i)
-            {
-              const auto &t = search_results_[i];
-              Element status_el = text(t.status);
-              if (t.status == "todo")
-                status_el = status_el | color(Color::Blue);
-              else if (t.status == "in_progress")
-                status_el = status_el | color(Color::Yellow);
-              else if (t.status == "done")
-                status_el = status_el | color(Color::Green);
-
-              auto row = hbox({
-                  text(" #" + std::to_string(t.id) + " ") | dim,
-                  text(t.title) | flex,
-                  text("  "),
-                  status_el,
-                  text(" "),
-              });
-              if (i == search_selected_)
-                row = row | inverted;
-              result_rows.push_back(row);
-            }
-          }
-
-          auto modal_view =
-              vbox({
-                  text(" Search") | bold,
-                  separator(),
-                  hbox({text(" / ") | bold, search_input_comp->Render()}),
-                  separator(),
-                  vbox(result_rows) | size(HEIGHT, LESS_THAN, 12),
-                  separator(),
-                  text(
-                      "  \u2191\u2193 navigate   Enter:jump   Esc:close"
-                  ) | dim,
-              }) |
-              border | size(WIDTH, EQUAL, 55) | center;
-          return dbox({main_view, clear_under(modal_view | center)});
-        }
-
-        if (modal_ == Modal::ConfirmLogout)
-        {
-          auto modal_view =
-              vbox({
-                  text(" Logout") | bold,
-                  separator(),
-                  text(" Are you sure you want to log out?"),
-                  separator(),
-                  hbox({logout_yes->Render(), text("  "), logout_no->Render()}),
-              }) |
-              border | size(WIDTH, EQUAL, 42) | center;
-          return dbox({main_view, clear_under(modal_view | center)});
-        }
-
-        return main_view;
+        result_rows.push_back(
+            text(search_query_.empty() ? "  Type to search\u2026" : "  (no results)") | dim
+        );
       }
-  );
+      else
+      {
+        for (int i = 0; i < (int)search_results_.size(); ++i)
+        {
+          const auto &t = search_results_[i];
+          Element status_el = text(t.status);
+          if      (t.status == "todo")        status_el = status_el | color(Color::Blue);
+          else if (t.status == "in_progress") status_el = status_el | color(Color::Yellow);
+          else if (t.status == "done")        status_el = status_el | color(Color::Green);
+          auto row = hbox({text(" #" + std::to_string(t.id) + " ") | dim, text(t.title) | flex,
+                           text("  "), status_el, text(" ")});
+          if (i == search_selected_) row = row | inverted;
+          result_rows.push_back(row);
+        }
+      }
+      auto modal_view =
+          vbox({
+              text(" Search") | bold, separator(),
+              hbox({text(" / ") | bold, search_input_comp->Render()}), separator(),
+              vbox(result_rows) | size(HEIGHT, LESS_THAN, 12), separator(),
+              text("  \u2191\u2193 navigate   Enter:jump   Esc:close") | dim,
+          }) |
+          border | size(WIDTH, EQUAL, 55) | center;
+      return dbox({main_view, clear_under(modal_view | center)});
+    }
+
+    if (modal_ == Modal::ConfirmLogout)
+    {
+      auto modal_view =
+          vbox({
+              text(" Logout") | bold, separator(),
+              text(" Are you sure you want to log out?"), separator(),
+              hbox({logout_yes->Render(), text("  "), logout_no->Render()}),
+          }) |
+          border | size(WIDTH, EQUAL, 42) | center;
+      return dbox({main_view, clear_under(modal_view | center)});
+    }
+
+    return main_view;
+  });
 
   screen.Loop(final_renderer);
   return 0;
