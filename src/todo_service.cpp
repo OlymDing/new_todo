@@ -1,6 +1,5 @@
 #include "todo_service.h"
 
-#include <algorithm>
 #include <functional>
 #include <stdexcept>
 
